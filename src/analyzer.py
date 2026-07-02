@@ -3806,6 +3806,33 @@ class GeminiAnalyzer:
 > {chip_instruction}
 """
         
+
+        # 添加股权集中度数据（台股集保户，TDCC 官方数据；holder-count 集中度，非成本价分布）
+        shareholding_block = (
+            fundamental_context.get("shareholding_concentration", {})
+            if isinstance(fundamental_context, dict)
+            else {}
+        )
+        shareholding_data = (
+            shareholding_block.get("data", {})
+            if isinstance(shareholding_block, dict)
+            else {}
+        )
+        if shareholding_block.get("status") == "ok" and shareholding_data:
+            big_pct = shareholding_data.get("big_holder_pct", "N/A")
+            retail_pct = shareholding_data.get("retail_pct", "N/A")
+            shareholding_date = shareholding_data.get("date", "N/A")
+            prompt += f"""
+### 股权集中度（台股集保户，TDCC官方数据）
+| 指标 | 数值 | 说明 |
+|------|------|------|
+| 大户持股比例 | {big_pct}% | 单一集保户持股 1,000,001 股以上（千张大户）占比 |
+| 散户持股比例 | {retail_pct}% | 单一集保户持股 1-50,000 股（50张以下）占比 |
+| 资料日期 | {shareholding_date} | 集保户股权分散周报，每周更新一次 |
+
+> 本数据反映持股集中度（多少股份掌握在大户/散户手中），不是成本价分布，不能与筹码分布（获利比例/平均成本/集中度）混用或互相推导。
+"""
+
         # 添加趋势分析结果（仅隐式内建 bull_trend 默认回退保留旧口径）
         if 'trend_analysis' in context:
             trend = _sanitize_trend_analysis_for_prompt(

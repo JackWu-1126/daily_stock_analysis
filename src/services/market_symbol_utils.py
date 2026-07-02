@@ -19,6 +19,9 @@ class SuffixMarketSpec:
     market: str
     suffixes: tuple[str, ...]
     digit_lengths: tuple[int, ...]
+    # TWSE/TPEx ETF codes may carry a single trailing letter marking share class
+    # (L=leveraged, R=inverse, A=actively managed, e.g. 00631L, 00403A).
+    allow_letter_suffix: bool = False
 
 
 _SUFFIX_MARKET_SPECS: tuple[SuffixMarketSpec, ...] = (
@@ -26,7 +29,7 @@ _SUFFIX_MARKET_SPECS: tuple[SuffixMarketSpec, ...] = (
     SuffixMarketSpec("kr", ("KS", "KQ"), (6,)),
     # Taiwan support mirrors the same suffix-only pattern; keep it here so the
     # shared helpers stay complete for all yfinance-only offshore markets.
-    SuffixMarketSpec("tw", ("TW", "TWO"), (4, 5, 6)),
+    SuffixMarketSpec("tw", ("TW", "TWO"), (4, 5, 6), allow_letter_suffix=True),
 )
 
 _MARKET_TO_SPEC = {spec.market: spec for spec in _SUFFIX_MARKET_SPECS}
@@ -59,9 +62,13 @@ def get_suffix_market(stock_code: str) -> Optional[str]:
     spec = _SUFFIX_TO_SPEC.get(suffix)
     if spec is None:
         return None
-    if not (base.isdigit() and len(base) in spec.digit_lengths):
-        return None
-    return spec.market
+    if base.isdigit() and len(base) in spec.digit_lengths:
+        return spec.market
+    if spec.allow_letter_suffix and len(base) >= 2:
+        numeric_part, letter = base[:-1], base[-1]
+        if letter.isalpha() and numeric_part.isdigit() and len(numeric_part) in spec.digit_lengths:
+            return spec.market
+    return None
 
 
 def is_suffix_market_symbol(stock_code: str, market: Optional[str] = None) -> bool:

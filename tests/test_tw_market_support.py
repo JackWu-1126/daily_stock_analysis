@@ -74,6 +74,26 @@ def test_normalize_and_detect_tw_suffix_codes() -> None:
     assert normalize_code("2330.TW") == "2330.TW"
 
 
+def test_tw_etf_share_class_letter_suffix() -> None:
+    """TWSE/TPEx ETFs may carry a single share-class letter after the digit
+    base: L=leveraged, R=inverse, A=actively managed (e.g. 00631L, 00403A).
+    """
+    assert normalize_stock_code("00631l.tw") == "00631L.TW"
+    assert normalize_stock_code("00403a.tw") == "00403A.TW"
+
+    assert detect_market("00631L.TW") == "tw"
+    assert detect_market("00403A.TW") == "tw"
+
+    assert get_market_for_stock("00631L.TW") == "tw"
+
+    assert is_code_like("00631L.TW") is True
+    assert normalize_code("00631l.tw") == "00631L.TW"
+
+    fetcher = YfinanceFetcher()
+    assert fetcher._convert_stock_code("00631L.TW") == "00631L.TW"
+    assert fetcher._convert_stock_code("00403A.TW") == "00403A.TW"
+
+
 def test_market_guidelines_for_tw_keep_taiwan_context() -> None:
     tw_guidelines = get_market_guidelines("2330.TW")
 

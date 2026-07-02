@@ -29,6 +29,10 @@ x-common: &common
     # Longbridge OAuth token cache persistence; entrypoint repairs container-side ownership for dsa user.
     # Create ../longbridge_tokens on the host before copying an authorized token cache into it.
     - ../longbridge_tokens:/home/dsa/.longbridge
+    # Claude Code CLI 登录凭证（可选，仅 GENERATION_BACKEND=claude_code_cli 时使用）。
+    # 用法同 Longbridge：先建 ../claude_cli_credentials 目录，把本机
+    # ~/.claude/.credentials.json 复制进去，再挂载为只读，避免容器写回宿主机凭证。
+    - ../claude_cli_credentials/.credentials.json:/home/dsa/.claude/.credentials.json:ro
     # 如需覆盖前端静态资源，可挂载本地 static 目录
     # - ../static:/app/static:ro
 

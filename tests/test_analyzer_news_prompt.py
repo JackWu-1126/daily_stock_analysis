@@ -214,6 +214,52 @@ class AnalyzerNewsPromptTestCase(unittest.TestCase):
         self.assertIn("接近压力且主力流出时不得追买", prompt)
         self.assertIn("洗盘观察", prompt)
 
+    def test_prompt_includes_tw_shareholding_concentration(self) -> None:
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+
+        context = {
+            "code": "2330.TW",
+            "stock_name": "台积电",
+            "date": "2026-06-26",
+            "today": {},
+            "fundamental_context": {
+                "shareholding_concentration": {
+                    "status": "ok",
+                    "data": {
+                        "big_holder_pct": 85.12,
+                        "retail_pct": 8.54,
+                        "date": "20260626",
+                    },
+                }
+            },
+        }
+
+        prompt = analyzer._format_prompt(context, "台积电", news_context=None)
+
+        self.assertIn("股权集中度（台股集保户，TDCC官方数据）", prompt)
+        self.assertIn("85.12", prompt)
+        self.assertIn("8.54", prompt)
+        self.assertIn("不是成本价分布", prompt)
+
+    def test_prompt_omits_shareholding_concentration_when_not_ok(self) -> None:
+        with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
+            analyzer = GeminiAnalyzer()
+
+        context = {
+            "code": "600519",
+            "stock_name": "贵州茅台",
+            "date": "2026-03-16",
+            "today": {},
+            "fundamental_context": {
+                "shareholding_concentration": {"status": "not_supported", "data": {}},
+            },
+        }
+
+        prompt = analyzer._format_prompt(context, "贵州茅台", news_context=None)
+
+        self.assertNotIn("股权集中度（台股集保户", prompt)
+
     def test_prompt_prefers_context_news_window_days(self) -> None:
         with patch.object(GeminiAnalyzer, "_init_litellm", return_value=None):
             analyzer = GeminiAnalyzer()

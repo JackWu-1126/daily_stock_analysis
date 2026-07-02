@@ -136,8 +136,13 @@ def normalize_stock_code(stock_code: str) -> str:
             return f"{base}.{suffix.upper()}"
         if suffix.upper() in ('KS', 'KQ') and base.isdigit() and len(base) == 6:
             return f"{base}.{suffix.upper()}"
-        if suffix.upper() in ('TW', 'TWO') and base.isdigit() and 4 <= len(base) <= 6:
-            return f"{base}.{suffix.upper()}"
+        if suffix.upper() in ('TW', 'TWO'):
+            # TWSE/TPEx ETFs may carry a single share-class letter after the
+            # digit base: L=leveraged, R=inverse, A=actively managed
+            # (e.g. 00631L, 00403A).
+            tw_digits = base[:-1] if base[-1:].isalpha() else base
+            if tw_digits.isdigit() and 4 <= len(tw_digits) <= 6:
+                return f"{base.upper()}.{suffix.upper()}"
         if suffix.upper() == 'HK' and base.isdigit() and 1 <= len(base) <= 5:
             return f"HK{base.zfill(5)}"
         if base.upper() in ('SH', 'SS', 'SZ', 'BJ') and suffix.isdigit():
@@ -3024,6 +3029,79 @@ class DataFetcherManager:
                 ["not supported for offshore market"],
             )
 
+
+        # shareholding_concentration: tw (台股) has a free official TDCC 集保户股权分散
+        # feed (holder/share-count concentration by ownership-size tier); every other
+        # offshore market keeps not_supported. tw-only + strictly additive + fail-open:
+        # any error or no-data -> not_supported, which never interrupts the main analysis.
+        # This is a HOLDER-COUNT concentration metric, not a cost-basis distribution — it
+        # must never be conflated with / written into the ChipDistribution (avg_cost /
+        # cost_90_low / cost_90_high / concentration_90) schema used for CN chip data.
+        tw_shareholding_record = None
+        if market == "tw":
+            shareholding_fetcher = getattr(self, "_tw_shareholding_fetcher", None)
+            if shareholding_fetcher is None:
+                # Wiring (import + construct) is a one-time op; a failure here is a
+                # programming / deploy bug, so log it LOUD (error). Still fail-open.
+                try:
+                    from data_provider.tw_shareholding_fetcher import TwShareholdingFetcher
+
+                    shareholding_fetcher = TwShareholdingFetcher()
+                    self._tw_shareholding_fetcher = shareholding_fetcher
+                except Exception as exc:  # noqa: BLE001 - wiring failure: loud but fail-open
+                    logger.error("[tw-shareholding] fetcher init failed (wiring bug?) code=%s: %s", stock_code, exc)
+                    shareholding_fetcher = None
+            if shareholding_fetcher is not None:
+                # Run the fetch under the SAME fundamental stage/fetch budget as the other
+                # offshore blocks so a slow TDCC call cannot push the analysis past its
+                # deadline — it fails open on timeout.
+                shareholding_timeout = min(fetch_timeout, max(stage_timeout - (time.time() - start_ts), 0.0))
+                if shareholding_timeout > 0:
+                    tw_shareholding_record, shareholding_err, _shareholding_ms = self._run_with_retry(
+                        lambda: shareholding_fetcher.get_shareholding_concentration(stock_code),
+                        shareholding_timeout,
+                        "fundamental_tw_shareholding",
+                    )
+                    if shareholding_err:
+                        logger.warning(
+                            "[tw-shareholding] fetch failed/timeout code=%s: %s", stock_code, shareholding_err
+                        )
+                else:
+                    tw_shareholding_record = None
+        # status 'ok' only when the record carries all core figures (a genuine 0 is kept).
+        _tw_shareholding_core = ("big_holder_pct", "retail_pct", "total_holders", "total_shares")
+        if tw_shareholding_record is not None and all(
+            tw_shareholding_record.get(key) is not None for key in _tw_shareholding_core
+        ):
+            shareholding_status = "ok"
+            result_ctx["shareholding_concentration"] = self._build_fundamental_block(
+                "ok",
+                {
+                    "big_holder_pct": tw_shareholding_record.get("big_holder_pct"),
+                    "big_holder_count": tw_shareholding_record.get("big_holder_count"),
+                    "retail_pct": tw_shareholding_record.get("retail_pct"),
+                    "retail_holder_count": tw_shareholding_record.get("retail_holder_count"),
+                    "total_holders": tw_shareholding_record.get("total_holders"),
+                    "total_shares": tw_shareholding_record.get("total_shares"),
+                    "unit": tw_shareholding_record.get("unit"),
+                    "date": tw_shareholding_record.get("date"),
+                    "source": tw_shareholding_record.get("source"),
+                },
+                [{
+                    "provider": tw_shareholding_record.get("source", "tw-shareholding"),
+                    "result": "ok",
+                    "duration_ms": 0,
+                }],
+                [],
+            )
+        else:
+            shareholding_status = "not_supported"
+            result_ctx["shareholding_concentration"] = self._build_fundamental_block(
+                "not_supported",
+                {},
+                [{"provider": "fundamental_pipeline", "result": "not_supported", "duration_ms": 0}],
+                ["not supported for offshore market"],
+            )
         result_ctx["belong_boards"] = belong_boards
 
         block_statuses = {
@@ -3031,12 +3109,13 @@ class DataFetcherManager:
             "growth": growth_status,
             "earnings": earnings_status,
             "institution": institution_status,
+            "shareholding_concentration": shareholding_status,
             "capital_flow": "not_supported",
             "dragon_tiger": "not_supported",
             "boards": "not_supported",
         }
         result_ctx["coverage"] = block_statuses
-        for block in ("valuation", "growth", "earnings", "institution", "capital_flow", "dragon_tiger", "boards"):
+        for block in ("valuation", "growth", "earnings", "institution", "shareholding_concentration", "capital_flow", "dragon_tiger", "boards"):
             result_ctx["errors"].extend(result_ctx[block].get("errors", []))
             result_ctx["source_chain"].extend(result_ctx[block].get("source_chain", []))
 
@@ -3047,6 +3126,8 @@ class DataFetcherManager:
         # without institution data are byte-identical (institution is not_supported there).
         status_values = list(active_statuses.values())
         if institution_status == "ok":
+            status_values.append("ok")
+        if shareholding_status == "ok":
             status_values.append("ok")
         if all(value == "not_supported" for value in status_values):
             result_ctx["status"] = "not_supported"

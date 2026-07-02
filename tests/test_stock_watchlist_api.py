@@ -49,6 +49,25 @@ def test_watchlist_remove_deletes_raw_hk_code_from_prefixed_variant_request() ->
     assert service.update_calls == [""]
 
 
+def test_watchlist_add_accepts_tw_suffix_codes_including_etf_share_class() -> None:
+    """Watchlist add persists the raw input as-typed (existing contract); this
+    regression only asserts that TW suffix codes pass validation and are
+    appended instead of being rejected as an invalid_stock_code."""
+    service = FakeSystemConfigService("600519")
+
+    plain_response = add_to_watchlist(
+        WatchlistRequest(stock_code="2330.tw"),
+        service=service,
+    )
+    leveraged_response = add_to_watchlist(
+        WatchlistRequest(stock_code="00631l.tw"),
+        service=service,
+    )
+
+    assert plain_response.stock_codes == ["600519", "2330.tw"]
+    assert leveraged_response.stock_codes == ["600519", "2330.tw", "00631l.tw"]
+
+
 def test_watchlist_matching_is_case_insensitive_for_us_tickers() -> None:
     service = FakeSystemConfigService("aapl")
 

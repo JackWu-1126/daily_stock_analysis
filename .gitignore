@@ -53,6 +53,10 @@ env/
 *~
 .cursorrules
 
+# OAuth 凭证挂载目录（docker-compose 用，包含真实登录凭证，禁止提交）
+/longbridge_tokens/
+/claude_cli_credentials/
+
 # 数据和日志
 /data/
 /.llm_usage_hmac_secret

@@ -15,6 +15,13 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY apps/dsa-web/ ./
 RUN npm run build
 
+# ===================================
+# Claude Code CLI（可选，GENERATION_BACKEND=claude_code_cli 实验性 backend 用）
+# ===================================
+# 需要 Node >=22，独立于上面 web-builder 的 node:20，故单开一个 stage。
+FROM node:22-slim AS claude-cli-builder
+RUN npm install -g @anthropic-ai/claude-code
+
 # Pin to bookworm: wkhtmltopdf was removed from Debian testing (2025)
 FROM python:3.11-slim-bookworm
 
@@ -57,6 +64,12 @@ COPY src/ ./src/
 COPY strategies/ ./strategies/
 COPY --from=web-builder /app/static ./static/
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+# Claude Code CLI（可选）：复制 Node 运行时 + 全局安装的 claude 包。
+# GENERATION_BACKEND=litellm（默认）不会用到这些文件，纯附加不影响现有路径。
+COPY --from=claude-cli-builder /usr/local/bin/node /usr/local/bin/node
+COPY --from=claude-cli-builder /usr/local/bin/claude /usr/local/bin/claude
+COPY --from=claude-cli-builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 # Verify the bundled AlphaSift adapter from requirements.
 RUN python -c "import alphasift.dsa_adapter"

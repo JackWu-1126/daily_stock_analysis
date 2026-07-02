@@ -27,4 +27,27 @@ describe('stock code validation', () => {
       expect(result.valid).toBe(false);
     }
   );
+
+  test.each([
+    ['2330.TW', '2330.TW'],
+    ['0050.tw', '0050.TW'],
+    ['00631L.TW', '00631L.TW'],
+    ['00403A.tw', '00403A.TW'],
+    ['6488.TWO', '6488.TWO'],
+  ])('accepts TW Yahoo suffix code %s', (input, normalized) => {
+    expect(looksLikeStockCode(input)).toBe(true);
+    expect(validateStockCode(input)).toEqual({
+      valid: true,
+      normalized,
+    });
+    expect(isObviouslyInvalidStockQuery(input)).toBe(false);
+  });
+
+  test.each(['2330', '2330.TWX', '00631LL.TW'])(
+    'does not treat ambiguous TW-like query %s as a valid suffix code',
+    (input) => {
+      const result = validateStockCode(input);
+      expect(result.valid).toBe(false);
+    }
+  );
 });

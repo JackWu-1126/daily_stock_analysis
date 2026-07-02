@@ -109,6 +109,16 @@ const jpSuggestion = {
   score: 60,
 };
 
+const twSuggestion = {
+  canonicalCode: "2330.TW",
+  displayCode: "2330.TW",
+  nameZh: "台積電",
+  market: "TW" as const,
+  matchType: "exact" as const,
+  matchField: "code" as const,
+  score: 100,
+};
+
 describe('StockAutocomplete', () => {
   const mockOnChange = vi.fn();
   const mockOnSubmit = vi.fn();
@@ -551,6 +561,41 @@ describe('StockAutocomplete', () => {
       expect(screen.getByText('日股')).toBeInTheDocument();
       expect(screen.getByText('000660.KS')).toBeInTheDocument();
       expect(screen.getByText('7203.T')).toBeInTheDocument();
+    });
+
+    it('renders a TW market badge in the suggestion list without triggering the error-boundary fallback', () => {
+      autocompleteHookImpl = () => ({
+        query: '',
+        setQuery: vi.fn(),
+        suggestions: [twSuggestion],
+        isOpen: true,
+        highlightedIndex: 0,
+        setHighlightedIndex: vi.fn(),
+        highlightPrevious: vi.fn(),
+        highlightNext: vi.fn(),
+        handleSelect: vi.fn(),
+        close: vi.fn(),
+        reset: vi.fn(),
+        isComposing: false,
+        setIsComposing: vi.fn(),
+        runtimeFallback: false,
+        error: null,
+      });
+
+      render(
+        <StockAutocomplete
+          value="2330"
+          onChange={mockOnChange}
+          onSubmit={mockOnSubmit}
+        />
+      );
+
+      const input = screen.getByDisplayValue('2330');
+      fireEvent.focus(input);
+
+      expect(screen.getByText('台股')).toBeInTheDocument();
+      expect(screen.getByText('2330.TW')).toBeInTheDocument();
+      expect(input).not.toHaveAttribute('data-autocomplete-mode', 'fallback');
     });
 
     it('falls back to the plain input when the autocomplete tree throws during render', () => {

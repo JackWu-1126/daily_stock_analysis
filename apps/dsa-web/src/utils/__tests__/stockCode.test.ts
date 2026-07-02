@@ -68,6 +68,11 @@ describe('normalizeStockCode', () => {
     expect(normalizeStockCode('2330')).toBe('2330');
   });
 
+  it('keeps TW leveraged/inverse/active ETF share-class letter suffixes (e.g. 00631L, 00403A)', () => {
+    expect(normalizeStockCode('00631l.tw')).toBe('00631L.TW');
+    expect(normalizeStockCode('00403A.TW')).toBe('00403A.TW');
+  });
+
   it('is case-insensitive for prefixes', () => {
     expect(normalizeStockCode('sh600519')).toBe('600519');
     expect(normalizeStockCode('sz000001')).toBe('000001');
