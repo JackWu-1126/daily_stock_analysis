@@ -832,6 +832,8 @@ class Config:
     news_intel_fetch_timeout_sec: float = 8.0  # 单个资讯源拉取超时
     news_intel_max_items_per_source: int = 50  # 单次每个资讯源最多采集条数
     newsnow_base_url: str = "https://newsnow.busiyi.world"  # NewsNow HTTP API base URL (数据源侧，不影响 LLM/provider base URL)
+    news_intel_auto_fetch_enabled: bool = True  # 是否启用免费 RSS/NewsNow 资讯源的后台自动补种与定时拉取
+    news_intel_auto_fetch_interval_minutes: int = 20  # 自动拉取间隔（分钟），与 SCHEDULE_ENABLED 无关，独立运作
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
 
     # === Agent 模式配置 ===
@@ -1723,6 +1725,14 @@ class Config:
                 maximum=200,
             ),
             newsnow_base_url=((os.getenv('NEWSNOW_BASE_URL') or '').strip().rstrip('/') or 'https://newsnow.busiyi.world'),
+            news_intel_auto_fetch_enabled=os.getenv('NEWS_INTEL_AUTO_FETCH_ENABLED', 'true').lower() == 'true',
+            news_intel_auto_fetch_interval_minutes=parse_env_int(
+                os.getenv('NEWS_INTEL_AUTO_FETCH_INTERVAL_MINUTES'),
+                20,
+                field_name='NEWS_INTEL_AUTO_FETCH_INTERVAL_MINUTES',
+                minimum=5,
+                maximum=1440,
+            ),
             bias_threshold=parse_env_float(os.getenv('BIAS_THRESHOLD'), 5.0, field_name='BIAS_THRESHOLD', minimum=1.0),
             agent_generation_backend=agent_generation_backend,
             agent_litellm_model=agent_litellm_model,

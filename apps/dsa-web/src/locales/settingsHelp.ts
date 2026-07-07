@@ -407,6 +407,18 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响新闻上下文数量、时效性和报告长度。'],
     notes: ['窗口过长可能引入陈旧信息，过短可能遗漏慢发酵事件。'],
   },
+  'settings.data_source.news_intel_auto_fetch': {
+    title: '免费 RSS/NewsNow 自动拉取',
+    summary: '控制内建免费新闻源（SEC、HKEX、MarketWatch、财联社、雪球、华尔街见闻、金十数据、格隆汇等）的后台自动补种与定时拉取。',
+    usage: 'NEWS_INTEL_AUTO_FETCH_ENABLED 开关自动拉取；NEWS_INTEL_AUTO_FETCH_INTERVAL_MINUTES 设拉取间隔（分钟）。',
+    valueNotes: [
+      '与 SCHEDULE_ENABLED（每日股票分析定时任务）无关，独立运作：只要 Web 服务在跑就会自动拉取。',
+      '首次启动会自动创建 8 个内建免费来源并启用；关闭开关不会删除已创建的来源，只是不再自动拉取。',
+      '这些来源不需要注册任何账号或 API Key。',
+    ],
+    impact: ['影响个股分析与大盘复盘的新闻上下文补充来源；关闭后不影响其他已配置的搜索渠道。'],
+    notes: ['关闭该开关可以完全停止对这些免费来源的对外请求。'],
+  },
   'settings.notification.FEISHU_WEBHOOK_URL': {
     title: '飞书群机器人 Webhook',
     summary: '配置飞书自定义群机器人，用于把分析报告推送到指定飞书群。',
@@ -1557,6 +1569,18 @@ const settingsHelpEnUS: SettingsHelpMap = {
     valueNotes: ['The effective window is constrained by both values.'],
     impact: ['Affects news context size, freshness, and report length.'],
     notes: ['Too wide can include stale news; too narrow can miss slow-moving events.'],
+  },
+  'settings.data_source.news_intel_auto_fetch': {
+    title: 'Free RSS/NewsNow Auto-Fetch',
+    summary: 'Controls background seeding and periodic fetching of the built-in free news sources (SEC, HKEX, MarketWatch, CLS, Xueqiu, Wallstreetcn, Jin10, Gelonghui).',
+    usage: 'NEWS_INTEL_AUTO_FETCH_ENABLED toggles it; NEWS_INTEL_AUTO_FETCH_INTERVAL_MINUTES sets the fetch interval in minutes.',
+    valueNotes: [
+      'Independent of SCHEDULE_ENABLED (the daily analysis schedule) — runs as long as the web service is up.',
+      'On first startup, the 8 built-in free sources are auto-created and enabled; disabling the switch keeps them but stops auto-fetching.',
+      'No account or API key is required for these sources.',
+    ],
+    impact: ['Supplements the news context for stock analysis and market review; unrelated to other configured search channels.'],
+    notes: ['Disable to stop all outbound requests to these free sources.'],
   },
   'settings.notification.FEISHU_WEBHOOK_URL': {
     title: 'Feishu Webhook URL',

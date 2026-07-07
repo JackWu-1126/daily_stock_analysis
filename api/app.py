@@ -208,6 +208,42 @@ def _schedule_stock_index_background_refresh(app: FastAPI, reason: str) -> None:
     )
 
 
+async def _intelligence_auto_fetch_loop(interval_minutes: int) -> None:
+    """独立于 SCHEDULE_ENABLED 的背景循环：启动时补种内建免费 RSS/NewsNow 来源
+    （幂等，按名称去重），随后立即拉取一次，此后每隔 interval_minutes 再拉取一次。
+    单一来源或单轮拉取失败均不得终止循环（fail-open）。
+    """
+    from src.services.intelligence_service import IntelligenceService
+
+    try:
+        await run_in_threadpool(IntelligenceService().create_default_sources, {"enabled": True})
+    except Exception as exc:  # noqa: BLE001 - 补种失败不应阻止后续拉取循环
+        logger.warning("[intel-auto-fetch] seed default sources failed: %s", exc)
+
+    while True:
+        try:
+            result = await run_in_threadpool(IntelligenceService().fetch_enabled_sources)
+            logger.info("[intel-auto-fetch] fetched %s source(s)", result.get("source_count"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 必须保持 best-effort，不能让循环挂掉
+            logger.warning("[intel-auto-fetch] fetch cycle failed: %s", exc)
+        await asyncio.sleep(max(1, interval_minutes) * 60)
+
+
+def _schedule_intelligence_auto_fetch(app: FastAPI, config) -> None:
+    if not getattr(config, "news_intel_auto_fetch_enabled", True):
+        return
+    task = getattr(app.state, "intel_auto_fetch_task", None)
+    if task is not None and not task.done():
+        return
+
+    interval = getattr(config, "news_intel_auto_fetch_interval_minutes", 20)
+    app.state.intel_auto_fetch_task = asyncio.create_task(
+        _intelligence_auto_fetch_loop(interval)
+    )
+
+
 def _load_runtime_scheduler_args() -> dict:
     raw_value = os.getenv(RUNTIME_SCHEDULER_ARGS_ENV)
     if not raw_value:
@@ -278,6 +314,9 @@ async def app_lifespan(app: FastAPI):
         runtime_scheduler=app.state.runtime_scheduler_service,
     )
     _schedule_stock_index_background_refresh(app, "startup")
+    from src.config import get_config as _get_config_for_intel_auto_fetch
+
+    _schedule_intelligence_auto_fetch(app, _get_config_for_intel_auto_fetch())
     try:
         yield
     finally:
@@ -286,6 +325,11 @@ async def app_lifespan(app: FastAPI):
             refresh_task.cancel()
             with suppress(asyncio.CancelledError):
                 await refresh_task
+        intel_task = getattr(app.state, "intel_auto_fetch_task", None)
+        if intel_task is not None and not intel_task.done():
+            intel_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await intel_task
         if hasattr(app.state, "system_config_service"):
             delattr(app.state, "system_config_service")
         runtime_scheduler = getattr(app.state, "runtime_scheduler_service", None)

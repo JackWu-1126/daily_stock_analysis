@@ -1,4 +1,26 @@
 import apiClient from './index';
+import { toCamelCase } from './utils';
+
+export type KLinePoint = {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number;
+  amount?: number;
+  changePercent?: number;
+  ma5?: number;
+  ma10?: number;
+  ma20?: number;
+};
+
+export type StockHistoryResponse = {
+  stockCode: string;
+  stockName?: string;
+  period: string;
+  data: KLinePoint[];
+};
 
 export type ExtractItem = {
   code?: string | null;
@@ -50,5 +72,13 @@ export const stocksApi = {
       return { codes: data.codes ?? [], items: data.items };
     }
     throw new Error('请提供文件或粘贴文本');
+  },
+
+  async getHistory(stockCode: string, days = 120): Promise<StockHistoryResponse> {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/stocks/${encodeURIComponent(stockCode)}/history`,
+      { params: { period: 'daily', days } },
+    );
+    return toCamelCase<StockHistoryResponse>(response.data);
   },
 };

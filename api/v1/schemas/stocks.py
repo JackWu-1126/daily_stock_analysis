@@ -59,7 +59,10 @@ class KLineData(BaseModel):
     volume: Optional[float] = Field(None, description="成交量")
     amount: Optional[float] = Field(None, description="成交额")
     change_percent: Optional[float] = Field(None, description="涨跌幅 (%)")
-    
+    ma5: Optional[float] = Field(None, description="5日均线")
+    ma10: Optional[float] = Field(None, description="10日均线")
+    ma20: Optional[float] = Field(None, description="20日均线")
+
     model_config = ConfigDict(json_schema_extra={
         "example": {
             "date": "2024-01-01",
@@ -69,7 +72,10 @@ class KLineData(BaseModel):
             "close": 1800.00,
             "volume": 10000000,
             "amount": 18000000000,
-            "change_percent": 0.84
+            "change_percent": 0.84,
+            "ma5": 1795.20,
+            "ma10": 1788.50,
+            "ma20": 1772.10
         }
     })
 

@@ -2004,7 +2004,8 @@ class GeminiAnalyzer:
 - 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
 - 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
 - 建议输出可选展示字段 `dashboard.signal_attribution` 六字段；解释推荐理由的构成，包括技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号。
-- 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。"""
+- 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。
+- `trend_analysis`、`technical_analysis`、`ma_analysis`、`volume_analysis`、`pattern_analysis`、`fundamental_analysis`、`sector_position`、`company_highlights`、`news_summary`、`market_sentiment`、`hot_topics`、`analysis_summary`、`key_points`、`risk_warning`、`buy_reason`、`data_sources`、`short_term_outlook`、`medium_term_outlook` 这些字段的值必须是纯文本字符串，禁止输出嵌套对象或数组（例如不要写成 `{"trend_status": "..."}`，而要直接写成一句话文本）。"""
 
     SYSTEM_PROMPT = """你是一位{market_placeholder}投资分析师，负责生成专业的【决策仪表盘】分析报告。
 
@@ -2181,7 +2182,8 @@ class GeminiAnalyzer:
 - 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
 - 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
 - 建议输出可选展示字段 `dashboard.signal_attribution` 六字段；解释推荐理由的构成，包括技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号。
-- 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。"""
+- 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。
+- `trend_analysis`、`technical_analysis`、`ma_analysis`、`volume_analysis`、`pattern_analysis`、`fundamental_analysis`、`sector_position`、`company_highlights`、`news_summary`、`market_sentiment`、`hot_topics`、`analysis_summary`、`key_points`、`risk_warning`、`buy_reason`、`data_sources`、`short_term_outlook`、`medium_term_outlook` 这些字段的值必须是纯文本字符串，禁止输出嵌套对象或数组（例如不要写成 `{"trend_status": "..."}`，而要直接写成一句话文本）。"""
 
     TEXT_SYSTEM_PROMPT = """你是一位专业的股票分析助手。
 

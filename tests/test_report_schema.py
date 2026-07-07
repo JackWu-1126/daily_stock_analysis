@@ -123,6 +123,56 @@ class TestAnalysisReportSchema(unittest.TestCase):
         with self.assertRaises(Exception):
             AnalysisReportSchema.model_validate(data)
 
+    def test_schema_coerces_dict_free_text_field_to_string(self) -> None:
+        """A nested dict for a free-text field (observed LLM output quirk) is
+        flattened to readable text instead of failing schema validation."""
+        data = {
+            "stock_name": "测试",
+            "sentiment_score": 60,
+            "trend_prediction": "看多",
+            "operation_advice": "买入",
+            "technical_analysis": {"trend_status": "多头排列", "note": "震荡整理状态"},
+        }
+        schema = AnalysisReportSchema.model_validate(data)
+        self.assertIsInstance(schema.technical_analysis, str)
+        self.assertIn("多头排列", schema.technical_analysis)
+        self.assertIn("震荡整理状态", schema.technical_analysis)
+
+    def test_schema_coerces_list_free_text_field_to_string(self) -> None:
+        data = {
+            "stock_name": "测试",
+            "sentiment_score": 60,
+            "trend_prediction": "看多",
+            "operation_advice": "买入",
+            "key_points": ["放量突破", "均线多头"],
+        }
+        schema = AnalysisReportSchema.model_validate(data)
+        self.assertIsInstance(schema.key_points, str)
+        self.assertIn("放量突破", schema.key_points)
+        self.assertIn("均线多头", schema.key_points)
+
+    def test_schema_leaves_plain_string_free_text_field_unchanged(self) -> None:
+        data = {
+            "stock_name": "测试",
+            "sentiment_score": 60,
+            "trend_prediction": "看多",
+            "operation_advice": "买入",
+            "technical_analysis": "技术面综合分析文本",
+        }
+        schema = AnalysisReportSchema.model_validate(data)
+        self.assertEqual(schema.technical_analysis, "技术面综合分析文本")
+
+    def test_schema_allows_none_free_text_field(self) -> None:
+        data = {
+            "stock_name": "测试",
+            "sentiment_score": 60,
+            "trend_prediction": "看多",
+            "operation_advice": "买入",
+            "technical_analysis": None,
+        }
+        schema = AnalysisReportSchema.model_validate(data)
+        self.assertIsNone(schema.technical_analysis)
+
 
 class TestAnalyzerSchemaFallback(unittest.TestCase):
     """Analyzer fallback when schema validation fails."""

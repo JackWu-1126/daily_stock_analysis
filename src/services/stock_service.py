@@ -10,8 +10,10 @@
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional, Dict, Any, List
+
+import pandas as pd
 
 from src.repositories.stock_repo import StockRepository
 
@@ -111,21 +113,39 @@ class StockService:
                 f"暂不支持 '{period}' 周期，目前仅支持 'daily'。"
                 "weekly/monthly 聚合功能将在后续版本实现。"
             )
-        
+
         try:
-            # 调用数据获取器获取历史数据
-            from data_provider.base import DataFetcherManager
-            
+            from data_provider.base import DataFetcherManager, normalize_stock_code
+
+            normalized_code = normalize_stock_code(stock_code)
             manager = DataFetcherManager()
+
+            target = date.today()
+            start = target - timedelta(days=int(days * 1.8))
+            bars = self.repo.get_range(normalized_code, start, target)
+
+            if bars and len(bars) >= min(days, 200):
+                stock_name = manager.get_stock_name(stock_code)
+                data = [self._bar_to_kline_dict(bar) for bar in bars[-days:]]
+                return {
+                    "stock_code": stock_code,
+                    "stock_name": stock_name,
+                    "period": period,
+                    "data": data,
+                }
+
+            # DB 数据不足，回退到实时抓取并暖化 DB
             df, source = manager.get_daily_data(stock_code, days=days)
-            
+
             if df is None or df.empty:
                 logger.warning(f"获取 {stock_code} 历史数据失败")
                 return {"stock_code": stock_code, "period": period, "data": []}
-            
+
+            self.repo.save_dataframe(df, normalized_code, source)
+
             # 获取股票名称
             stock_name = manager.get_stock_name(stock_code)
-            
+
             # 转换为响应格式
             data = []
             for _, row in df.iterrows():
@@ -134,7 +154,7 @@ class StockService:
                     date_str = date_val.strftime("%Y-%m-%d")
                 else:
                     date_str = str(date_val)
-                
+
                 data.append({
                     "date": date_str,
                     "open": float(row.get("open", 0)),
@@ -144,21 +164,44 @@ class StockService:
                     "volume": float(row.get("volume", 0)) if row.get("volume") else None,
                     "amount": float(row.get("amount", 0)) if row.get("amount") else None,
                     "change_percent": float(row.get("pct_chg", 0)) if row.get("pct_chg") else None,
+                    "ma5": float(row["ma5"]) if pd.notna(row.get("ma5")) else None,
+                    "ma10": float(row["ma10"]) if pd.notna(row.get("ma10")) else None,
+                    "ma20": float(row["ma20"]) if pd.notna(row.get("ma20")) else None,
                 })
-            
+
             return {
                 "stock_code": stock_code,
                 "stock_name": stock_name,
                 "period": period,
                 "data": data,
             }
-            
+
         except ImportError:
             logger.warning("DataFetcherManager 未找到，返回空数据")
             return {"stock_code": stock_code, "period": period, "data": []}
         except Exception as e:
             logger.error(f"获取历史数据失败: {e}", exc_info=True)
             return {"stock_code": stock_code, "period": period, "data": []}
+
+    @staticmethod
+    def _bar_to_kline_dict(bar: Any) -> Dict[str, Any]:
+        """将 StockDaily ORM 对象转换为 K 线响应字典"""
+        bar_dict = bar.to_dict()
+        date_val = bar_dict.get("date")
+        date_str = date_val.strftime("%Y-%m-%d") if hasattr(date_val, "strftime") else str(date_val)
+        return {
+            "date": date_str,
+            "open": bar_dict.get("open"),
+            "high": bar_dict.get("high"),
+            "low": bar_dict.get("low"),
+            "close": bar_dict.get("close"),
+            "volume": bar_dict.get("volume"),
+            "amount": bar_dict.get("amount"),
+            "change_percent": bar_dict.get("pct_chg"),
+            "ma5": bar_dict.get("ma5"),
+            "ma10": bar_dict.get("ma10"),
+            "ma20": bar_dict.get("ma20"),
+        }
     
     def _get_placeholder_quote(self, stock_code: str) -> Dict[str, Any]:
         """

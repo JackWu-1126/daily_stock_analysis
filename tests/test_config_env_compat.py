@@ -299,6 +299,8 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
             "NEWS_INTEL_FETCH_TIMEOUT_SEC": "5.5",
             "NEWS_INTEL_MAX_ITEMS_PER_SOURCE": "25",
             "NEWSNOW_BASE_URL": "https://newsnow.example.com/",
+            "NEWS_INTEL_AUTO_FETCH_ENABLED": "false",
+            "NEWS_INTEL_AUTO_FETCH_INTERVAL_MINUTES": "45",
         })
         with patch.dict(os.environ, news_intel_env, clear=True):
             Config._instance = None
@@ -312,6 +314,29 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(with_news_intel.news_intel_max_items_per_source, 25)
         self.assertEqual(with_news_intel.news_intel_retention_days, 45)
         self.assertEqual(with_news_intel.newsnow_base_url, "https://newsnow.example.com")
+        self.assertEqual(with_news_intel.news_intel_auto_fetch_enabled, False)
+        self.assertEqual(with_news_intel.news_intel_auto_fetch_interval_minutes, 45)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_news_intel_auto_fetch_defaults_and_bounds(
+        self,
+        _mock_parse_litellm_yaml,
+        _mock_setup_env,
+    ) -> None:
+        base_env = {"STOCK_LIST": "600519"}
+        with patch.dict(os.environ, base_env, clear=True):
+            Config._instance = None
+            defaults = Config._load_from_env()
+        self.assertEqual(defaults.news_intel_auto_fetch_enabled, True)
+        self.assertEqual(defaults.news_intel_auto_fetch_interval_minutes, 20)
+
+        out_of_range_env = dict(base_env)
+        out_of_range_env["NEWS_INTEL_AUTO_FETCH_INTERVAL_MINUTES"] = "1"  # below minimum=5
+        with patch.dict(os.environ, out_of_range_env, clear=True):
+            Config._instance = None
+            clamped = Config._load_from_env()
+        self.assertEqual(clamped.news_intel_auto_fetch_interval_minutes, 5)
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])

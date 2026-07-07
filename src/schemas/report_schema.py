@@ -12,7 +12,7 @@ Uses Optional for lenient parsing; business-layer integrity checks are separate.
 import math
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class PositionAdvice(BaseModel):
@@ -227,6 +227,15 @@ class Dashboard(BaseModel):
     signal_attribution: Optional[SignalAttribution] = None
 
 
+_FREE_TEXT_REPORT_FIELDS = (
+    "analysis_summary", "key_points", "risk_warning", "buy_reason",
+    "trend_analysis", "short_term_outlook", "medium_term_outlook", "technical_analysis",
+    "ma_analysis", "volume_analysis", "pattern_analysis", "fundamental_analysis",
+    "sector_position", "company_highlights", "news_summary", "market_sentiment",
+    "hot_topics", "data_sources",
+)
+
+
 class AnalysisReportSchema(BaseModel):
     """
     Top-level schema for LLM report JSON.
@@ -265,3 +274,18 @@ class AnalysisReportSchema(BaseModel):
 
     search_performed: Optional[bool] = None
     data_sources: Optional[str] = None
+
+    @field_validator(*_FREE_TEXT_REPORT_FIELDS, mode="before")
+    @classmethod
+    def _coerce_free_text_to_string(cls, value: Any) -> Any:
+        """LLM occasionally nests a free-text field as a dict/list (e.g.
+        {"trend_status": "..."}) instead of a plain string. Flatten it into
+        readable text instead of failing schema validation over one field.
+        """
+        if isinstance(value, dict):
+            parts = [f"{k}: {v}" for k, v in value.items() if v is not None]
+            return "；".join(parts) if parts else None
+        if isinstance(value, list):
+            parts = [str(item) for item in value if item is not None]
+            return "；".join(parts) if parts else None
+        return value

@@ -1,6 +1,7 @@
 import React from 'react';
 import type { AnalysisResult, AnalysisReport } from '../../types/analysis';
 import { ReportOverview } from './ReportOverview';
+import { StockPriceChart } from './StockPriceChart';
 import { ReportStrategy } from './ReportStrategy';
 import { ReportNews } from './ReportNews';
 import { ReportDetails } from './ReportDetails';
@@ -67,6 +68,9 @@ export const ReportSummary: React.FC<ReportSummaryProps> = ({
         isHistory={isHistory}
         watchlist={watchlist}
       />
+
+      {/* 走势图区 */}
+      <StockPriceChart stockCode={meta.stockCode} stockName={meta.stockName} language={reportLanguage} />
 
       {/* 策略点位区 */}
       <ReportStrategy strategy={strategy} language={reportLanguage} />
