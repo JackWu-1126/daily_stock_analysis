@@ -160,6 +160,109 @@ print(json.dumps({{"type": "result", "subtype": "success", "result": "{{\\"senti
         assert contract_arg in runtime_argv
 
 
+def test_claude_preset_extracts_usage_and_primary_model(tmp_path: Path) -> None:
+    envelope = {
+        "type": "result",
+        "subtype": "success",
+        "result": '{"sentiment_score": 77}',
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 5,
+            "cache_creation_input_tokens": 3,
+        },
+        "modelUsage": {
+            "claude-haiku-4-5-20251001": {"inputTokens": 2, "outputTokens": 1},
+            "claude-sonnet-5": {"inputTokens": 10, "outputTokens": 20},
+        },
+    }
+    script = _script(
+        tmp_path,
+        f"""
+import json
+print(json.dumps({envelope!r}))
+""",
+    )
+    preset = LocalCliPreset(
+        preset_id="claude_code_cli",
+        executable=sys.executable,
+        argv=(script, *CLAUDE_CODE_CLI_PRESET.argv),
+        display_name="Mock Claude Code CLI",
+        extractor=CLAUDE_CODE_CLI_PRESET.extractor,
+        contract_args=CLAUDE_CODE_CLI_PRESET.contract_args,
+    )
+    backend = LocalCliGenerationBackend(
+        _config(generation_backend="claude_code_cli"),
+        preset=preset,
+    )
+
+    result = backend.generate("prompt", {}, response_validator=lambda text: json.loads(text))
+
+    # sonnet has more total tokens (30) than haiku (3) -> picked as the primary model.
+    assert result.model == "anthropic/claude-sonnet-5"
+    assert result.usage["input_tokens"] == 10
+    assert result.usage["output_tokens"] == 20
+    assert result.usage["cache_read_input_tokens"] == 5
+    assert result.usage["cache_creation_input_tokens"] == 3
+    assert "usage_available" not in result.usage  # real usage, not the unavailable placeholder
+
+
+def test_claude_preset_falls_back_to_placeholder_usage_when_envelope_has_no_usage(tmp_path: Path) -> None:
+    script = _script(
+        tmp_path,
+        """
+import json
+print(json.dumps({"type": "result", "subtype": "success", "result": "{\\"sentiment_score\\": 77}"}))
+""",
+    )
+    preset = LocalCliPreset(
+        preset_id="claude_code_cli",
+        executable=sys.executable,
+        argv=(script, *CLAUDE_CODE_CLI_PRESET.argv),
+        display_name="Mock Claude Code CLI",
+        extractor=CLAUDE_CODE_CLI_PRESET.extractor,
+        contract_args=CLAUDE_CODE_CLI_PRESET.contract_args,
+    )
+    backend = LocalCliGenerationBackend(
+        _config(generation_backend="claude_code_cli"),
+        preset=preset,
+    )
+
+    result = backend.generate("prompt", {}, response_validator=lambda text: json.loads(text))
+
+    assert result.model == "claude_code_cli"  # no modelUsage -> falls back to the preset id
+    assert result.usage == {
+        "usage_available": False,
+        "usage_source": "unavailable",
+        "backend": "claude_code_cli",
+    }
+
+
+def test_extract_claude_code_usage_and_model_pure_function() -> None:
+    from src.llm.local_cli_backend import _extract_claude_code_usage_and_model
+
+    usage, model = _extract_claude_code_usage_and_model(
+        json.dumps(
+            {
+                "type": "result",
+                "usage": {"input_tokens": 1, "output_tokens": 2},
+                "modelUsage": {
+                    "model-a": {"inputTokens": 1, "outputTokens": 1},
+                    "model-b": {"inputTokens": 100, "outputTokens": 100},
+                },
+            }
+        )
+    )
+    assert usage == {"input_tokens": 1, "output_tokens": 2}
+    assert model == "model-b"
+
+    # Malformed / missing input never raises -- usage/model reporting is best-effort.
+    assert _extract_claude_code_usage_and_model("not json") == ({}, None)
+    assert _extract_claude_code_usage_and_model("") == ({}, None)
+    assert _extract_claude_code_usage_and_model(json.dumps([1, 2, 3])) == ({}, None)
+    assert _extract_claude_code_usage_and_model(json.dumps({"type": "result"})) == ({}, None)
+
+
 def test_missing_contract_arg_is_capability_unsupported(tmp_path: Path) -> None:
     preset = LocalCliPreset(
         preset_id="claude_code_cli",
@@ -1306,6 +1409,67 @@ time.sleep(30)
         time.sleep(0.05)
     else:
         pytest.fail("child process was not terminated with the process group")
+
+
+def test_cancel_event_kills_process_group(tmp_path: Path) -> None:
+    import threading
+
+    pid_file = tmp_path / "child_cancel.pid"
+    backend = _backend(
+        tmp_path,
+        f"""
+import subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+open({str(pid_file)!r}, "w", encoding="utf-8").write(str(child.pid))
+time.sleep(30)
+""",
+        generation_backend_timeout_seconds=30,
+    )
+
+    cancel_event = threading.Event()
+
+    def _cancel_soon():
+        # Wait for the child pid file to exist so the poll loop is definitely running.
+        deadline = time.time() + 5
+        while time.time() < deadline and not pid_file.exists():
+            time.sleep(0.02)
+        cancel_event.set()
+
+    canceller = threading.Thread(target=_cancel_soon)
+    canceller.start()
+    try:
+        with pytest.raises(GenerationError) as exc_info:
+            backend.generate("prompt", {}, cancel_event=cancel_event)
+    finally:
+        canceller.join(timeout=5)
+
+    assert exc_info.value.error_code is GenerationErrorCode.CANCELLED
+    assert exc_info.value.retryable is False
+    assert exc_info.value.fallbackable is False
+
+    child_pid = int(pid_file.read_text(encoding="utf-8"))
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except OSError:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("child process was not terminated after cancellation")
+
+
+def test_generate_without_cancel_event_ignores_check(tmp_path: Path) -> None:
+    backend = _backend(
+        tmp_path,
+        """
+import json
+print(json.dumps({"sentiment_score": 70}))
+""",
+    )
+
+    result = backend.generate("prompt", {}, cancel_event=None)
+    assert json.loads(result.text)["sentiment_score"] == 70
 
 
 def test_env_allowlist_and_denylist(monkeypatch) -> None:

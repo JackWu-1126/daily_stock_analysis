@@ -35,6 +35,7 @@ from src.services.run_diagnostics import (
 )
 from src.utils.analysis_metadata import SELECTION_SOURCES
 from src.services.stock_code_utils import resolve_index_stock_code_for_analysis
+from src.services.task_cancellation import TaskCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,7 @@ class AnalysisTaskQueue:
         self._tasks: Dict[str, TaskInfo] = {}           # task_id -> TaskInfo
         self._analyzing_stocks: Dict[str, str] = {}     # dedupe_key -> task_id
         self._futures: Dict[str, Future] = {}           # task_id -> Future
+        self._cancel_events: Dict[str, threading.Event] = {}  # task_id -> cancel Event（协作式取消）
         
         # SSE 订阅者列表（asyncio.Queue 实例）
         self._subscribers: List['AsyncQueue'] = []
@@ -432,6 +434,7 @@ class AnalysisTaskQueue:
                 )
                 self._tasks[task_id] = task_info
                 self._analyzing_stocks[dedupe_key] = task_id
+                self._cancel_events[task_id] = threading.Event()
 
                 try:
                     future = self.executor.submit(
@@ -494,10 +497,12 @@ class AnalysisTaskQueue:
             if task_id in self._tasks:
                 raise ValueError(f"任务 ID 已存在: {task_id}")
             self._tasks[task_id] = task_info
+            self._cancel_events.setdefault(task_id, threading.Event())
             try:
                 future = self.executor.submit(self._execute_background_task, task_id, run_task)
             except Exception:
                 del self._tasks[task_id]
+                self._cancel_events.pop(task_id, None)
                 raise
 
             self._futures[task_id] = future
@@ -511,6 +516,7 @@ class AnalysisTaskQueue:
             future = self._futures.pop(task_id, None)
             if future is not None:
                 future.cancel()
+            self._cancel_events.pop(task_id, None)
 
             task = self._tasks.pop(task_id, None)
             if task:
@@ -531,6 +537,53 @@ class AnalysisTaskQueue:
         with self._data_lock:
             task = self._tasks.get(task_id)
             return task.copy() if task else None
+
+    def register_cancel_event(self, task_id: str) -> threading.Event:
+        """获取（或创建）task_id 对应的取消 Event，供任务提交时预先注册。"""
+        with self._data_lock:
+            return self._cancel_events.setdefault(task_id, threading.Event())
+
+    def request_cancel(self, task_id: str) -> Optional[TaskInfo]:
+        """
+        请求取消一个任务（协作式取消）。
+
+        - 任务不存在：返回 None。
+        - 任务已是终态（COMPLETED/FAILED/CANCELLED）：原样返回，no-op。
+        - 任务仍在排队、尚未开始执行：通过 Future.cancel() 立即取消。
+        - 任务已在执行：设置 CANCEL_REQUESTED 状态并 set() 对应的取消 Event，
+          由执行中的分析/复盘流程在下一个协作式检查点自行停止。
+        """
+        with self._data_lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return None
+
+            if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+                return task.copy()
+
+            future = self._futures.get(task_id)
+            if future is not None and future.cancel():
+                task.status = TaskStatus.CANCELLED
+                task.message = "任务已取消"
+                task.completed_at = datetime.now()
+                dedupe_key = _dedupe_stock_code_key(task.stock_code)
+                if self._analyzing_stocks.get(dedupe_key) == task_id:
+                    del self._analyzing_stocks[dedupe_key]
+                self._cancel_events.pop(task_id, None)
+                task_snapshot = task.copy()
+                self._broadcast_event("task_cancelled", task_snapshot.to_dict())
+                logger.info(f"[TaskQueue] 任务已取消（排队中）: {task_id}")
+                return task_snapshot
+
+            cancel_event = self._cancel_events.setdefault(task_id, threading.Event())
+            cancel_event.set()
+            task.status = TaskStatus.CANCEL_REQUESTED
+            task.message = "正在请求取消..."
+            task_snapshot = task.copy()
+
+        self._broadcast_event("task_cancel_requested", task_snapshot.to_dict())
+        logger.info(f"[TaskQueue] 已请求取消（执行中）: {task_id}")
+        return task_snapshot
 
     def append_task_flow_event(
         self,
@@ -695,11 +748,13 @@ class AnalysisTaskQueue:
             task.progress = 10
         
         self._broadcast_event("task_started", task.to_dict())
-        
+
+        cancel_event = self._cancel_events.setdefault(task_id, threading.Event())
+
         try:
             # 导入分析服务（延迟导入避免循环依赖）
             from src.services.analysis_service import AnalysisService
-            
+
             # 执行分析
             service = AnalysisService()
 
@@ -729,10 +784,11 @@ class AnalysisTaskQueue:
                 query_source=query_source,
                 portfolio_context=portfolio_context,
                 report_language=report_language,
+                cancel_event=cancel_event,
             )
             reset_run_diagnostic_context(diag_token)
             diag_token = None
-            
+
             if result:
                 # 更新任务状态为完成
                 with self._data_lock:
@@ -760,13 +816,33 @@ class AnalysisTaskQueue:
             else:
                 # 分析返回空结果
                 raise Exception(service.last_error or "分析返回空结果")
-                
+
+        except TaskCancelledError:
+            if "diag_token" in locals():
+                reset_run_diagnostic_context(diag_token)
+            logger.info(f"[TaskQueue] 任务已取消: {task_id} ({stock_code})")
+
+            with self._data_lock:
+                task = self._tasks.get(task_id)
+                if task:
+                    task.status = TaskStatus.CANCELLED
+                    task.completed_at = datetime.now()
+                    task.message = "任务已取消"
+
+                    dedupe_key = _dedupe_stock_code_key(task.stock_code)
+                    if dedupe_key in self._analyzing_stocks:
+                        del self._analyzing_stocks[dedupe_key]
+
+            self._broadcast_event("task_cancelled", task.to_dict())
+            self._cleanup_old_tasks()
+            return None
+
         except Exception as e:
             if "diag_token" in locals():
                 reset_run_diagnostic_context(diag_token)
             error_msg = str(e)
             logger.error(f"[TaskQueue] 任务失败: {task_id} ({stock_code}), 错误: {error_msg}")
-            
+
             with self._data_lock:
                 task = self._tasks.get(task_id)
                 if task:
@@ -774,18 +850,20 @@ class AnalysisTaskQueue:
                     task.completed_at = datetime.now()
                     task.error = error_msg[:200]  # 限制错误信息长度
                     task.message = f"分析失败: {error_msg[:50]}"
-                    
+
                     # 从分析中集合移除
                     dedupe_key = _dedupe_stock_code_key(task.stock_code)
                     if dedupe_key in self._analyzing_stocks:
                         del self._analyzing_stocks[dedupe_key]
-            
+
             self._broadcast_event("task_failed", task.to_dict())
-            
+
             # 清理过期任务
             self._cleanup_old_tasks()
-            
+
             return None
+        finally:
+            self._cancel_events.pop(task_id, None)
 
     def _execute_background_task(
         self,
@@ -847,6 +925,22 @@ class AnalysisTaskQueue:
             self._cleanup_old_tasks()
             return result
 
+        except TaskCancelledError:
+            logger.info(f"[TaskQueue] 自定义任务已取消: {task_id}")
+
+            with self._data_lock:
+                task = self._tasks.get(task_id)
+                if task:
+                    task.status = TaskStatus.CANCELLED
+                    task.completed_at = datetime.now()
+                    task.message = "任务已取消"
+
+            if task:
+                self._broadcast_event("task_cancelled", task.to_dict())
+
+            self._cleanup_old_tasks()
+            return None
+
         except Exception as e:  # pragma: no cover - behavior verified in downstream tests
             error_msg = str(e)
             logger.error(
@@ -866,7 +960,9 @@ class AnalysisTaskQueue:
 
             self._cleanup_old_tasks()
             return None
-    
+        finally:
+            self._cancel_events.pop(task_id, None)
+
     def _cleanup_old_tasks(self) -> int:
         """
         清理过期的已完成任务

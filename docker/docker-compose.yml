@@ -30,9 +30,9 @@ x-common: &common
     # Create ../longbridge_tokens on the host before copying an authorized token cache into it.
     - ../longbridge_tokens:/home/dsa/.longbridge
     # Claude Code CLI 登录凭证（可选，仅 GENERATION_BACKEND=claude_code_cli 时使用）。
-    # 用法同 Longbridge：先建 ../claude_cli_credentials 目录，把本机
-    # ~/.claude/.credentials.json 复制进去，再挂载为只读，避免容器写回宿主机凭证。
-    - ../claude_cli_credentials/.credentials.json:/home/dsa/.claude/.credentials.json:ro
+    # 直接只读挂载宿主机真实凭证文件（不是快照复制），跟随本机 Claude Code 的
+    # OAuth token 自动刷新，避免快照过期导致 login_required。:ro 防止容器写回宿主机。
+    - ${USERPROFILE}/.claude/.credentials.json:/home/dsa/.claude/.credentials.json:ro
     # 如需覆盖前端静态资源，可挂载本地 static 目录
     # - ../static:/app/static:ro
 

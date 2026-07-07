@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, Optional, Protocol
@@ -30,6 +31,7 @@ class GenerationErrorCode(str, Enum):
     CAPABILITY_UNSUPPORTED = "capability_unsupported"
     UNSAFE_CONFIG = "unsafe_config"
     UNKNOWN_BACKEND_ERROR = "unknown_backend_error"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -100,5 +102,12 @@ class GenerationBackend(Protocol):
         stream_progress_callback: Optional[Callable[[int], None]] = None,
         response_validator: Optional[Callable[[str], None]] = None,
         audit_context: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> GenerationResult:
-        """Generate text with the backend."""
+        """Generate text with the backend.
+
+        ``cancel_event``: cooperative cancellation signal. Local CLI backends check it
+        during their execution poll loop and kill the subprocess when set (near-immediate
+        effect); the ``litellm`` backend can only check it before dispatching a call
+        (an in-flight HTTP request cannot be aborted).
+        """

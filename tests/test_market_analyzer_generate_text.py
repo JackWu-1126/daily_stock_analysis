@@ -22,6 +22,8 @@ for _mod in ("litellm", "google.generativeai", "google.genai", "anthropic"):
 
 import pytest
 
+from src.llm.usage import should_persist_usage_telemetry
+
 
 @pytest.fixture(autouse=True)
 def _llm_usage_hmac_env(monkeypatch):
@@ -170,6 +172,7 @@ class TestAnalyzerGenerateText:
             mock_call.assert_called_once_with(
                 "写一份复盘",
                 generation_config={"max_tokens": 1024, "temperature": 0.5},
+                cancel_event=None,
             )
 
     def test_generate_text_does_not_persist_unavailable_usage(self):
@@ -424,6 +427,24 @@ class TestAnalyzerGenerateText:
             assert gen_cfg["max_tokens"] == 2048
             assert gen_cfg["temperature"] == 0.7
 
+    def test_generate_text_threads_cancel_event_to_call_litellm(self):
+        import threading
+
+        analyzer = self._make_analyzer()
+        cancel_event = threading.Event()
+        with patch.object(analyzer, "_call_litellm", return_value="ok") as mock_call:
+            analyzer.generate_text("hello", cancel_event=cancel_event)
+            _, kwargs = mock_call.call_args
+            assert kwargs["cancel_event"] is cancel_event
+
+    def test_generate_text_reraises_task_cancelled_error(self):
+        from src.services.task_cancellation import TaskCancelledError
+
+        analyzer = self._make_analyzer()
+        with patch.object(analyzer, "_call_litellm", side_effect=TaskCancelledError("cancelled")):
+            with pytest.raises(TaskCancelledError):
+                analyzer.generate_text("prompt")
+
     def test_call_litellm_wrapper_uses_generation_backend_tuple_contract(self):
         from src.llm.generation_backend import GenerationBackend
 
@@ -435,6 +456,11 @@ class TestAnalyzerGenerateText:
             usage={"provider": "gemini", "total_tokens": 9},
         )
 
+        # Default test config's generation_backend is "litellm", which the
+        # wrapper never re-normalizes (litellm's own generate() already
+        # normalizes internally with full message-HMAC context) -- so usage
+        # passes through unchanged here. See the local-CLI test below for the
+        # normalize-on-return-path behavior.
         with patch.object(analyzer, "_get_generation_backend", return_value=backend):
             result = analyzer._call_litellm(
                 "prompt",
@@ -459,6 +485,38 @@ class TestAnalyzerGenerateText:
         assert callable(backend.generate.call_args.kwargs["stream_progress_callback"])
         assert callable(backend.generate.call_args.kwargs["response_validator"])
         assert backend.generate.call_args.kwargs["audit_context"] == {"call_type": "analysis"}
+
+    def test_call_litellm_wrapper_normalizes_local_cli_backend_usage(self):
+        """Regression guard: a local-CLI-style raw usage dict (e.g. from
+        claude_code_cli) must come back normalized so should_persist_usage_telemetry
+        actually sees a token-count signal, instead of silently carrying the raw
+        shape all the way to the usage table (the bug this fix addresses)."""
+        from src.llm.generation_backend import GenerationBackend
+
+        analyzer = self._make_analyzer()
+        analyzer._config_override.generation_backend = "claude_code_cli"
+        backend = MagicMock(spec=GenerationBackend)
+        backend.generate.return_value = SimpleNamespace(
+            text="claude response",
+            model="anthropic/claude-sonnet-5",
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "cache_read_input_tokens": 5,
+                "cache_creation_input_tokens": 3,
+            },
+        )
+
+        with patch.object(analyzer, "_get_generation_backend", return_value=backend):
+            text, model, usage = analyzer._call_litellm("prompt", {"max_tokens": 128})
+
+        assert text == "claude response"
+        assert model == "anthropic/claude-sonnet-5"
+        # Anthropic's normalized prompt_tokens = fresh input + cache_read + cache_write
+        # (10 + 5 + 3), matching the existing anthropic branch in normalize_litellm_usage.
+        assert usage["prompt_tokens"] == 18
+        assert usage["completion_tokens"] == 20
+        assert should_persist_usage_telemetry(usage)
 
     def test_call_litellm_wraps_fallback_generation_error_with_primary_context(self):
         from src.llm.generation_backend import GenerationBackend, GenerationError, GenerationErrorCode
@@ -2399,6 +2457,69 @@ class TestAnalyzerGenerateText:
         assert result.success is False
         assert result.code == "600519"
         assert result.search_performed is True
+
+    def test_analyze_retries_same_backend_on_retryable_generation_error_without_fallback(self):
+        """Regression guard: a backend with NO configured fallback (e.g.
+        claude_code_cli with GENERATION_FALLBACK_BACKEND unset) raises a plain
+        GenerationError on invalid JSON, not _AllModelsFailedError. Before this
+        fix that error propagated straight out of analyze() with zero retries;
+        it must now be retried on the same backend using the existing
+        integrity-retry budget, and succeed if a later attempt is valid."""
+        from src.analyzer import AnalysisResult
+        from src.llm.generation_backend import GenerationError, GenerationErrorCode
+
+        analyzer = self._make_analyzer()
+        analyzer._config_override = SimpleNamespace(
+            gemini_request_delay=0,
+            report_language="zh",
+            litellm_model="claude_code_cli",
+            litellm_fallback_models=[],
+            llm_temperature=0.7,
+            llm_model_list=[],
+            report_integrity_enabled=True,
+            report_integrity_retry=1,
+        )
+
+        invalid_json_error = GenerationError(
+            error_code=GenerationErrorCode.INVALID_JSON,
+            stage="validation",
+            retryable=True,
+            fallbackable=True,
+            backend="claude_code_cli",
+        )
+        success_result = AnalysisResult(
+            code="600519",
+            name="贵州茅台",
+            sentiment_score=70,
+            trend_prediction="看多",
+            operation_advice="持有",
+            analysis_summary="分析结果",
+        )
+
+        with patch.object(analyzer, "is_available", return_value=True), \
+             patch.object(analyzer, "_get_analysis_system_prompt", return_value="system"), \
+             patch.object(analyzer, "_format_prompt", return_value="prompt"), \
+             patch.object(
+                 analyzer,
+                 "_call_litellm",
+                 side_effect=[invalid_json_error, ("valid json text", "claude_code_cli", {"prompt_tokens": 5})],
+             ) as mock_call, \
+             patch.object(analyzer, "_parse_response", return_value=success_result) as mock_parse, \
+             patch.object(analyzer, "_build_market_snapshot", return_value={}), \
+             patch.object(analyzer, "_check_content_integrity", return_value=(True, [])), \
+             patch("src.analyzer.persist_llm_usage") as mock_usage:
+
+            result = analyzer.analyze(
+                {"code": "600519", "stock_name": "贵州茅台"},
+                news_context="some news",
+            )
+
+        # First attempt raised GenerationError -> retried once on the same call path.
+        assert mock_call.call_count == 2
+        mock_parse.assert_called_once_with("valid json text", "600519", "贵州茅台")
+        mock_usage.assert_called_once()
+        assert result.code == "600519"
+        assert result.sentiment_score == 70
 
 
 # ---------------------------------------------------------------------------

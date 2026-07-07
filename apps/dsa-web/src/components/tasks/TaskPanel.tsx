@@ -1,10 +1,12 @@
 import type React from 'react';
-import { ChevronDown, RefreshCw, Workflow } from 'lucide-react';
+import { useState } from 'react';
+import { ChevronDown, RefreshCw, Workflow, X } from 'lucide-react';
 import { Badge, Button, Card, StatusDot, Tooltip } from '../common';
 import { DashboardPanelHeader } from '../dashboard';
 import type { TaskInfo } from '../../types/analysis';
 import { getRequestedPhaseLabel } from '../../utils/marketPhase';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { analysisApi } from '../../api/analysis';
 
 /**
  * 任务项组件属性
@@ -19,10 +21,26 @@ interface TaskItemProps {
  */
 const TaskItem: React.FC<TaskItemProps> = ({ task, onOpenRunFlow }) => {
   const { language, t } = useUiLanguage();
+  const [isCancelling, setIsCancelling] = useState(false);
   const isPending = task.status === 'pending';
   const isProcessing = task.status === 'processing';
   const isCancelRequested = task.status === 'cancel_requested';
   const isCancelled = task.status === 'cancelled';
+  const canCancel = (isPending || isProcessing) && !isCancelling;
+
+  const handleCancel = async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (!canCancel) {
+      return;
+    }
+    setIsCancelling(true);
+    try {
+      await analysisApi.cancelTask(task.taskId);
+    } catch (error) {
+      console.warn(t('taskPanel.cancelTaskFailed'), error);
+      setIsCancelling(false);
+    }
+  };
   const statusLabel = isCancelRequested
     ? t('taskPanel.cancelRequested')
     : isCancelled
@@ -62,6 +80,25 @@ const TaskItem: React.FC<TaskItemProps> = ({ task, onOpenRunFlow }) => {
         </div>
 
         <div className="relative z-10 flex shrink-0 items-center gap-1.5">
+          {canCancel ? (
+            <Tooltip content={t('taskPanel.cancelTask')}>
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xsm"
+                  className="h-8 w-8 px-0"
+                  onClick={handleCancel}
+                  disabled={isCancelling}
+                  aria-label={t('taskPanel.cancelTaskAria', {
+                    stock: task.stockName || task.stockCode,
+                  })}
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </Button>
+              </span>
+            </Tooltip>
+          ) : null}
           {onOpenRunFlow ? (
             <Tooltip content={t('taskPanel.openRunFlow')}>
               <span className="inline-flex">

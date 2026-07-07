@@ -77,6 +77,7 @@ from src.services.run_diagnostics import (
 from src.services.decision_signal_extractor import extract_and_persist_from_analysis_result
 from src.services.decision_signal_summary import summarize_decision_signal
 from src.enums import ReportType
+from src.services.task_cancellation import TaskCancelledError
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
 from src.core.trading_calendar import (
     build_market_phase_context,
@@ -187,6 +188,7 @@ class StockAnalysisPipeline:
         portfolio_context: Optional[Dict[str, Any]] = None,
         daily_market_context_enabled: Optional[bool] = None,
         daily_market_context_allow_generate: bool = True,
+        cancel_event: Optional[threading.Event] = None,
     ):
         """
         初始化调度器
@@ -214,7 +216,8 @@ class StockAnalysisPipeline:
             else bool(daily_market_context_enabled)
         )
         self.daily_market_context_allow_generate = daily_market_context_allow_generate
-        
+        self.cancel_event = cancel_event
+
         # 初始化各模块
         self.db = get_db()
         self.fetcher_manager = DataFetcherManager()
@@ -281,6 +284,9 @@ class StockAnalysisPipeline:
 
     def _emit_progress(self, progress: int, message: str) -> None:
         """Best-effort bridge from pipeline stages to task SSE progress."""
+        cancel_event = getattr(self, "cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            raise TaskCancelledError(getattr(self, "query_id", None))
         callback = getattr(self, "progress_callback", None)
         if callback is None:
             return
@@ -701,6 +707,7 @@ class StockAnalysisPipeline:
                     progress_callback=self._emit_progress,
                     stream_progress_callback=_on_llm_stream,
                     analysis_context_pack_summary=analysis_context_pack_summary,
+                    cancel_event=getattr(self, "cancel_event", None),
                 )
                 llm_duration_ms = int((time.monotonic() - llm_started_at) * 1000)
                 record_llm_run(
@@ -831,11 +838,13 @@ class StockAnalysisPipeline:
 
             return result
 
+        except TaskCancelledError:
+            raise
         except Exception as e:
             logger.error(f"{stock_name}({code}) 分析失败: {e}")
             logger.exception(f"{stock_name}({code}) 详细错误信息:")
             return None
-    
+
     def _enhance_context(
         self,
         context: Dict[str, Any],
@@ -915,6 +924,7 @@ class StockAnalysisPipeline:
                 'concentration_90': chip_data.concentration_90,
                 'concentration_70': chip_data.concentration_70,
                 'chip_status': chip_data.get_chip_status(current_price or 0),
+                'source': getattr(chip_data, 'source', None),
             }
         
         # 添加趋势分析结果
@@ -2832,7 +2842,9 @@ class StockAnalysisPipeline:
                 )
             
             return result
-            
+
+        except TaskCancelledError:
+            raise
         except Exception as e:
             # 捕获所有异常，确保单股失败不影响整体
             logger.exception(f"[{code}] 处理过程发生未知异常: {e}")

@@ -12,6 +12,7 @@
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -24,6 +25,7 @@ from src.report_language import normalize_report_language
 from src.search_service import SearchService
 from src.analyzer import AnalysisResult, GeminiAnalyzer
 from src.llm.generation_backend import GenerationError
+from src.services.task_cancellation import TaskCancelledError
 from src.services.run_diagnostics import (
     current_diagnostic_snapshot,
     record_history_run,
@@ -42,6 +44,7 @@ _MARKET_REVIEW_MARKETS = (
     ('us', 'us_title', '美股'),
     ('jp', 'jp_title', '日股'),
     ('kr', 'kr_title', '韩股'),
+    ('tw', 'tw_title', '台股'),
 )
 _MARKET_REVIEW_REGION_ORDER = tuple(market for market, _, _ in _MARKET_REVIEW_MARKETS)
 _VALID_MARKET_REVIEW_REGIONS = frozenset(_MARKET_REVIEW_REGION_ORDER)
@@ -119,6 +122,7 @@ def _get_market_review_text(language: str) -> dict[str, str]:
             "hk_title": "# HK Market Recap",
             "jp_title": "# Japan Market Recap",
             "kr_title": "# Korea Market Recap",
+            "tw_title": "# Taiwan Market Recap",
             "separator": "> Next market recap follows",
         }
     if normalized == "ko":
@@ -130,6 +134,7 @@ def _get_market_review_text(language: str) -> dict[str, str]:
             "hk_title": "# 홍콩 시황 리뷰",
             "jp_title": "# 일본 시황 리뷰",
             "kr_title": "# 한국 시황 리뷰",
+            "tw_title": "# 대만 시황 리뷰",
             "separator": "> 다음 시장 시황 리뷰",
         }
     return {
@@ -140,6 +145,7 @@ def _get_market_review_text(language: str) -> dict[str, str]:
         "hk_title": "# 港股大盘复盘",
         "jp_title": "# 日股大盘复盘",
         "kr_title": "# 韩股大盘复盘",
+        "tw_title": "# 台股大盘复盘",
         "separator": "> 以下为下一市场大盘复盘",
     }
 
@@ -184,6 +190,7 @@ def run_market_review(
     save_report_file: bool = True,
     persist_history: bool = True,
     trigger_source: str = "cli",
+    cancel_event: Optional[threading.Event] = None,
 ) -> Optional[str] | Optional[MarketReviewRunResult]:
     """
     执行大盘复盘分析
@@ -243,6 +250,7 @@ def run_market_review(
                     analyzer=analyzer,
                     region=mkt,
                     config=runtime_config,
+                    cancel_event=cancel_event,
                 )
                 review_result = mkt_analyzer.run_daily_review_with_snapshot()
                 mkt_report = review_result.report
@@ -281,6 +289,7 @@ def run_market_review(
                 analyzer=analyzer,
                 region=run_region,
                 config=runtime_config,
+                cancel_event=cancel_event,
             )
             review_result = market_analyzer.run_daily_review_with_snapshot()
             review_report = review_result.report
@@ -428,6 +437,15 @@ def run_market_review(
                 return merge_markdown_report
             return review_report
         
+    except TaskCancelledError:
+        logger.info(
+            "[MarketReview] component=market_review action=cancelled "
+            "trigger_source=%s query_id=%s region=%s",
+            trigger_source,
+            history_query_id,
+            persist_region,
+        )
+        raise
     except GenerationError:
         logger.exception(
             "[MarketReview] component=market_review action=failed "

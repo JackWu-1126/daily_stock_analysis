@@ -92,6 +92,7 @@ def test_generation_error_codes_include_phase2_values() -> None:
         "capability_unsupported",
         "unsafe_config",
         "unknown_backend_error",
+        "cancelled",
     }
 
 

@@ -402,6 +402,9 @@ const zh = {
   'taskPanel.pendingAria': '任务等待中',
   'taskPanel.openRunFlow': '查看运行流',
   'taskPanel.openRunFlowAria': '查看 {stock} 运行流',
+  'taskPanel.cancelTask': '取消任务',
+  'taskPanel.cancelTaskAria': '取消 {stock} 的分析任务',
+  'taskPanel.cancelTaskFailed': '取消任务失败',
   'taskPanel.statusAria': '任务状态：{status}',
   'taskPanel.title': '分析任务',
 
@@ -1149,6 +1152,9 @@ const en: Record<UiTextKey, string> = {
   'taskPanel.pendingAria': 'Task pending',
   'taskPanel.openRunFlow': 'View run flow',
   'taskPanel.openRunFlowAria': 'View {stock} run flow',
+  'taskPanel.cancelTask': 'Cancel task',
+  'taskPanel.cancelTaskAria': 'Cancel analysis task for {stock}',
+  'taskPanel.cancelTaskFailed': 'Failed to cancel task',
   'taskPanel.statusAria': 'Task status: {status}',
   'taskPanel.title': 'Analysis tasks',
 

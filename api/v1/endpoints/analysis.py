@@ -21,6 +21,7 @@ import copy
 import json
 import logging
 import re
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -135,6 +136,7 @@ def _run_market_review_background(
     lock_token: Optional[_MarketReviewExecutionLock] = None,
     config: Optional[Config] = None,
     query_id: Optional[str] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> None:
     """Run market review after the API response has been accepted."""
     from src.core.market_review import run_market_review
@@ -151,6 +153,7 @@ def _run_market_review_background(
             "override_region": override_region,
             "return_structured": True,
             "trigger_source": "api",
+            "cancel_event": cancel_event,
         }
         if query_id:
             review_kwargs["query_id"] = query_id
@@ -512,6 +515,7 @@ def trigger_market_review(
 
     try:
         task_id = uuid.uuid4().hex
+        cancel_event = get_task_queue().register_cancel_event(task_id)
         logger.info(
             "[MarketReview] component=market_review action=submit trigger_source=api "
             "task_id=%s region=%s send_notification=%s",
@@ -526,6 +530,7 @@ def trigger_market_review(
                 lock_token=lock_token,
                 config=runtime_config,
                 query_id=task_id,
+                cancel_event=cancel_event,
             ),
             stock_code="market_review",
             stock_name="大盘复盘",
@@ -948,6 +953,37 @@ def _build_task_analysis_result(task: Any) -> AnalysisResultResponse:
         payload["report"] = _ensure_report_action_fields(report_data)
 
     return AnalysisResultResponse.model_validate(payload)
+
+
+# ============================================================
+# POST /tasks/{task_id}/cancel - 取消任务
+# ============================================================
+
+@router.post(
+    "/tasks/{task_id}/cancel",
+    response_model=TaskInfo,
+    responses={
+        200: {"description": "取消请求已受理（可能已立即取消，或已标记待取消）"},
+        404: {"description": "任务不存在", "model": ErrorResponse},
+    },
+    summary="取消分析/大盘复盘任务",
+    description=(
+        "协作式取消：排队中未开始的任务会被立即取消；已在执行中的任务会在下一个检查点"
+        "（阶段边界、本地 CLI 后端的执行轮询）停止，本地 CLI 后端可近乎即时中断，"
+        "litellm 云端后端只能在当前这次调用返回后才会真正停止。"
+    ),
+)
+def cancel_analysis_task(task_id: str) -> TaskInfo:
+    """取消一个排队中或执行中的任务（个股分析/大盘复盘）。"""
+    task_queue = get_task_queue()
+    if task_queue.get_task(task_id) is None:
+        raise api_error(404, "not_found", f"任务不存在: {task_id}")
+
+    updated = task_queue.request_cancel(task_id)
+    if updated is None:
+        raise api_error(404, "not_found", f"任务不存在: {task_id}")
+
+    return TaskInfo.model_validate(updated.to_dict())
 
 
 # ============================================================

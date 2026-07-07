@@ -12,6 +12,7 @@
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -33,6 +34,7 @@ from src.llm.generation_backend import GenerationError
 from src.schemas.market_light import MARKET_LIGHT_REGIONS, MarketLightSnapshot
 from src.services.run_diagnostics import record_llm_run, record_llm_run_started
 from src.services.intelligence_service import IntelligenceService
+from src.services.task_cancellation import TaskCancelledError
 from data_provider.base import DataFetcherManager
 
 logger = logging.getLogger(__name__)
@@ -133,6 +135,7 @@ class MarketAnalyzer:
         analyzer=None,
         region: str = "cn",
         config: Optional[Any] = None,
+        cancel_event: Optional[threading.Event] = None,
     ):
         """
         初始化大盘分析器
@@ -142,14 +145,22 @@ class MarketAnalyzer:
             analyzer: AI分析器实例（用于调用LLM）
             region: 市场区域 cn=A股 hk=港股 us=美股 jp=日本 kr=韩国
             config: 本次复盘使用的配置；未传时读取全局配置
+            cancel_event: 协作式取消信号，阶段边界会检查并在设置时中止复盘
         """
         self.config = config or get_config()
         self.search_service = search_service
         self.analyzer = analyzer
         self.data_manager = DataFetcherManager()
-        self.region = region if region in ("cn", "us", "hk", "jp", "kr") else "cn"
+        self.region = region if region in ("cn", "us", "hk", "jp", "kr", "tw") else "cn"
         self.profile: MarketProfile = get_profile(self.region)
         self.strategy = get_market_strategy_blueprint(self.region)
+        self.cancel_event = cancel_event
+
+    def _check_cancelled(self) -> None:
+        """在阶段边界检查取消信号，设置时抛出 TaskCancelledError 中止复盘。"""
+        cancel_event = getattr(self, "cancel_event", None)
+        if cancel_event is not None and cancel_event.is_set():
+            raise TaskCancelledError(self._log_context())
 
     def _log_context(self) -> str:
         return f"component=market_review region={self.region}"
@@ -179,6 +190,8 @@ class MarketAnalyzer:
             return "Japan market" if review_language == "en" else "日本市场"
         if self.region == "kr":
             return "Korea market" if review_language == "en" else "韩国市场"
+        if self.region == "tw":
+            return "Taiwan market" if review_language == "en" else "台湾市场"
         if review_language == "en":
             return "A-share market"
         return "A股市场"
@@ -193,13 +206,15 @@ class MarketAnalyzer:
             return "JPY bn" if self._get_review_language() == "en" else "十亿日元"
         if self.region == "kr":
             return "KRW bn" if self._get_review_language() == "en" else "十亿韩元"
+        if self.region == "tw":
+            return "TWD bn" if self._get_review_language() == "en" else "十亿新台币"
         return "CNY 100m" if self._get_review_language() == "en" else "亿"
 
     def _format_turnover_value(self, amount_raw: float) -> str:
         """Format raw turnover according to market-specific units."""
         if amount_raw == 0.0:
             return "N/A"
-        if self.region in ("us", "hk", "jp", "kr"):
+        if self.region in ("us", "hk", "jp", "kr", "tw"):
             return f"{amount_raw / 1e9:.2f}"
         if amount_raw > 1e6:
             return f"{amount_raw / 1e8:.0f}"
@@ -220,6 +235,7 @@ class MarketAnalyzer:
                 "hk": "HK Market Recap",
                 "jp": "Japan Market Recap",
                 "kr": "Korea Market Recap",
+                "tw": "Taiwan Market Recap",
             }
             market_name = market_names.get(self.region, "A-share Market Recap")
             return f"## {date} {market_name}"
@@ -235,6 +251,8 @@ class MarketAnalyzer:
                 return "Analyze the key moves in the Nikkei 225, TOPIX, and other major Japanese indices."
             if self.region == "kr":
                 return "Analyze the key moves in the KOSPI, KOSDAQ, and other major Korean indices."
+            if self.region == "tw":
+                return "Analyze the key moves in the TAIEX, TPEx Index, and other major Taiwan indices."
             return "Analyze the price action in the SSE, SZSE, ChiNext, and other major indices."
         return self.profile.prompt_index_hint
 
@@ -615,8 +633,9 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
             "hk": "港股市场" if review_language == "zh" else "HK market",
             "jp": "日本股市" if review_language == "zh" else "Japan stock market",
             "kr": "韩国股市" if review_language == "zh" else "Korea stock market",
+            "tw": "台湾股市" if review_language == "zh" else "Taiwan stock market",
         }
-        
+
         try:
             logger.info("[大盘] %s action=search_market_news status=start", self._log_context())
             
@@ -696,7 +715,9 @@ Focus on index trend, liquidity, and sector rotation to shape the next-session t
                 model=getattr(self.config, "litellm_model", None),
                 call_type="market_review",
             )
-            review = self.analyzer.generate_text(prompt, max_tokens=8192, temperature=0.7)
+            review = self.analyzer.generate_text(
+                prompt, max_tokens=8192, temperature=0.7, cancel_event=getattr(self, "cancel_event", None)
+            )
         except Exception as exc:
             record_llm_run(
                 success=False,
@@ -1512,7 +1533,7 @@ Concept lagging: {bottom_concepts_text if bottom_concepts_text else "N/A"}"""
         output_template_sections = self._build_output_template_sections(review_language)
         zh_market_scope_name = self._get_market_scope_name("zh")
         zh_report_title = f"{overview.date} 大盘复盘"
-        if self.region in ("jp", "kr"):
+        if self.region in ("jp", "kr", "tw"):
             zh_report_title = f"{overview.date} {zh_market_scope_name}大盘复盘"
         workflow_hint = (
             "报告要像交易员盘后工作台：先给结论，再按数据表、主线、催化、计划展开"
@@ -1697,6 +1718,7 @@ Output the report content directly, no extra commentary.
                 "hk": "HK Market Recap",
                 "jp": "Japan Market Recap",
                 "kr": "Korea Market Recap",
+                "tw": "Taiwan Market Recap",
             }
             market_name = market_names.get(self.region, "A-share Market Recap")
             report = f"""## {overview.date} {market_name}
@@ -1718,7 +1740,7 @@ Market conditions can change quickly. The data above is for reference only and d
 """
             return report
 
-        market_labels = {"cn": "A股", "us": "美股", "hk": "港股", "jp": "日股", "kr": "韩股"}
+        market_labels = {"cn": "A股", "us": "美股", "hk": "港股", "jp": "日股", "kr": "韩股", "tw": "台股"}
         market_label = market_labels.get(self.region, "A股")
         dashboard_block = self._build_stats_block(overview) if self.profile.has_market_stats else ""
         indices_block = self._build_indices_block(overview)
@@ -1783,10 +1805,12 @@ Market conditions can change quickly. The data above is for reference only and d
 
         # 1. 获取市场概览
         overview = self.get_market_overview()
+        self._check_cancelled()
 
         # 2. 搜索市场新闻
         news = self.search_market_news()
         news = self._merge_persisted_market_intelligence(news)
+        self._check_cancelled()
 
         # 3. 生成复盘报告
         report = self.generate_market_review(overview, news)

@@ -229,6 +229,40 @@ KR_BLUEPRINT = MarketStrategyBlueprint(
     ],
 )
 
+TW_BLUEPRINT = MarketStrategyBlueprint(
+    region="tw",
+    title="台湾市场三段式复盘策略",
+    positioning="聚焦台湾加权指数、柜买指数、台积电等权值股与三大法人流向，形成次日交易计划。",
+    principles=[
+        "先看加权指数与柜买指数是否同向，再看台积电等权值股对指数的拉动或拖累。",
+        "三大法人（外资/投信/自营商）买卖超是台股特有的资金风向标，优先纳入判断。",
+        "只基于可得指数、三大法人数据、新闻和价格行为判断，不臆造市场广度或板块统计。",
+    ],
+    dimensions=[
+        StrategyDimension(
+            name="趋势结构",
+            objective="判断台湾市场处于上攻、震荡还是防守阶段。",
+            checkpoints=["加权指数/柜买指数是否同向", "台积电等权值股是否支撑或拖累指数", "关键支撑阻力是否被突破"],
+        ),
+        StrategyDimension(
+            name="法人与汇率",
+            objective="识别三大法人流向与新台币汇率对权益市场的影响。",
+            checkpoints=["外资/投信/自营商买卖超方向", "新台币汇率与外资流向的联动", "美股费半与全球半导体链映射"],
+        ),
+        StrategyDimension(
+            name="主题线索",
+            objective="提炼可延续主线与需要规避的拥挤方向。",
+            checkpoints=["半导体/AI 供应链持续性", "传产/金融股是否轮动", "新闻催化是否支撑价格行为"],
+        ),
+    ],
+    action_framework=[
+        "进攻：加权指数与柜买指数共振上行 + 三大法人转为净买超 + 权值股确认。",
+        "均衡：指数或法人流向分化，控制仓位并等待确认。",
+        "防守：权值股转弱或三大法人转为净卖超，优先控制回撤。",
+    ],
+)
+
+
 def get_market_strategy_blueprint(region: str) -> MarketStrategyBlueprint:
     """Return strategy blueprint by market region."""
     if region == "us":
@@ -239,4 +273,6 @@ def get_market_strategy_blueprint(region: str) -> MarketStrategyBlueprint:
         return JP_BLUEPRINT
     if region == "kr":
         return KR_BLUEPRINT
+    if region == "tw":
+        return TW_BLUEPRINT
     return CN_BLUEPRINT

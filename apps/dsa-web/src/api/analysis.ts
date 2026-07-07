@@ -9,6 +9,7 @@ import type {
   MarketReviewAccepted,
   MarketReviewRequest,
   TaskStatus,
+  TaskInfo,
   TaskListResponse,
 } from '../types/analysis';
 import type { RunFlowSnapshot } from '../types/runFlow';
@@ -160,6 +161,26 @@ export const analysisApi = {
     const data = toCamelCase<TaskListResponse>(response.data);
 
     return data;
+  },
+
+  /**
+   * Cancel a pending or processing task (stock analysis or market review).
+   * @param taskId Task ID
+   */
+  cancelTask: async (taskId: string): Promise<TaskInfo> => {
+    const response = await apiClient.post<Record<string, unknown>>(
+      `/api/v1/analysis/tasks/${encodeURIComponent(taskId)}/cancel`,
+      undefined,
+      {
+        validateStatus: (status) => status === 200 || status === 404,
+      }
+    );
+
+    if (response.status === 404) {
+      throw new Error('任务不存在，可能已完成或已被清理');
+    }
+
+    return toCamelCase<TaskInfo>(response.data);
   },
 
   /**

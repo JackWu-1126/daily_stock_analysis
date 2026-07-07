@@ -499,6 +499,50 @@ def _extract_claude_code_json(result: LocalCliExecutionResult, *, schema_mode: b
     return text
 
 
+def _extract_claude_code_usage_and_model(stdout: str) -> tuple[Dict[str, Any], Optional[str]]:
+    """Best-effort extraction of token usage + the primary model from a Claude
+    Code CLI JSON envelope.
+
+    Never raises: any parse issue returns ``({}, None)`` so a usage/model
+    reporting gap can never affect the already-extracted response text (usage
+    is telemetry, not correctness). Reuses the same envelope shape as
+    ``_extract_claude_code_json`` (top-level ``usage`` dict with
+    ``input_tokens`` / ``output_tokens`` / ``cache_read_input_tokens`` /
+    ``cache_creation_input_tokens``, which map directly onto the existing
+    Anthropic branch in ``normalize_litellm_usage``).
+    """
+    try:
+        envelope = json.loads((stdout or "").strip())
+    except (json.JSONDecodeError, TypeError):
+        return {}, None
+    if not isinstance(envelope, dict):
+        return {}, None
+
+    usage = envelope.get("usage")
+    usage = dict(usage) if isinstance(usage, dict) else {}
+
+    # modelUsage: {"<model-id>": {"inputTokens":.., "outputTokens":.., ...}, ...}.
+    # A single CLI turn may internally route a cheap model for routing/title
+    # work alongside the main model; pick the one with the most total tokens
+    # as "the" model attributed to this call.
+    model_usage = envelope.get("modelUsage")
+    primary_model: Optional[str] = None
+    if isinstance(model_usage, dict) and model_usage:
+        def _total_tokens(entry: Any) -> int:
+            if not isinstance(entry, dict):
+                return 0
+            input_tokens = entry.get("inputTokens") or 0
+            output_tokens = entry.get("outputTokens") or 0
+            try:
+                return int(input_tokens) + int(output_tokens)
+            except (TypeError, ValueError):
+                return 0
+
+        primary_model = max(model_usage, key=lambda key: _total_tokens(model_usage[key]))
+
+    return usage, primary_model
+
+
 def _extract_opencode_json_events(result: LocalCliExecutionResult) -> str:
     raw = (result.stdout or "").strip()
     if not raw:
@@ -747,6 +791,7 @@ class LocalCliGenerationBackend(GenerationBackend):
         stream_progress_callback: Optional[Callable[[int], None]] = None,
         response_validator: Optional[Callable[[str], None]] = None,
         audit_context: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> GenerationResult:
         executable, argv, executable_summary = self._resolve_command()
         timeout_seconds = min(
@@ -879,6 +924,19 @@ class LocalCliGenerationBackend(GenerationBackend):
                                 )
                             if process.poll() is not None:
                                 break
+                            if cancel_event is not None and cancel_event.is_set():
+                                self._terminate_process_group(process)
+                                diagnostics.update(_preview_diagnostics_from_files(stdout_path, stderr_path))
+                                raise self._error(
+                                    GenerationErrorCode.CANCELLED,
+                                    stage="execution",
+                                    retryable=False,
+                                    fallbackable=False,
+                                    details={
+                                        **diagnostics,
+                                        "reason": "cancelled",
+                                    },
+                                )
                             if time.monotonic() >= deadline:
                                 self._terminate_process_group(process)
                                 diagnostics.update(_preview_diagnostics_from_files(stdout_path, stderr_path))
@@ -1121,16 +1179,28 @@ class LocalCliGenerationBackend(GenerationBackend):
                     },
                 ) from exc
 
+        model_name = self._preset.preset_id
+        usage: Dict[str, Any] = {
+            "usage_available": False,
+            "usage_source": "unavailable",
+            "backend": self._preset.preset_id,
+        }
+        if self.backend_id == CLAUDE_CODE_CLI_BACKEND_ID:
+            cli_usage, cli_model = _extract_claude_code_usage_and_model(raw_result.stdout)
+            if cli_usage:
+                usage = cli_usage
+            if cli_model:
+                # anthropic/ prefix so normalize_litellm_usage's provider inference
+                # (_infer_provider) routes this through the existing Anthropic
+                # cache-token branch instead of the generic zero-usage fallback.
+                model_name = f"anthropic/{cli_model}"
+
         return GenerationResult(
             text=text,
-            model=self._preset.preset_id,
+            model=model_name,
             provider=self._preset.preset_id,
             backend=self.backend_id,
-            usage={
-                "usage_available": False,
-                "usage_source": "unavailable",
-                "backend": self._preset.preset_id,
-            },
+            usage=usage,
             raw=None,
             diagnostics=diagnostics,
         )

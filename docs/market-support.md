@@ -91,7 +91,9 @@ PY
 
 ## 台湾个股 suffix-only MVP（Issue #1772，Refs #1772）
 
-当前阶段支持手动输入台湾股票的 Yahoo Finance 后缀代码，进入既有个股分析、历史保存和基础报告展示链路。TWSE 上市股票使用 `.TW` 后缀，TPEx 上柜（柜买）股票使用 `.TWO` 后缀，二者折叠为同一 `tw` 市场标签。**本次覆盖市场识别（detection）、数据路由层、DecisionSignal/Portfolio/Intelligence 服务层与 API 市场枚举，以及 DecisionSignal/Portfolio 前端市场类型与筛选**；台股股票索引/种子、Web 自动补全与告警（大盘红绿灯）市场放行仍作为后续 PR。对齐 #1718 日韩 MVP 模式。
+当前阶段支持手动输入台湾股票的 Yahoo Finance 后缀代码，进入既有个股分析、历史保存和基础报告展示链路。TWSE 上市股票使用 `.TW` 后缀，TPEx 上柜（柜买）股票使用 `.TWO` 后缀，二者折叠为同一 `tw` 市场标签。**本次覆盖市场识别（detection）、数据路由层、DecisionSignal/Portfolio/Intelligence 服务层与 API 市场枚举，以及 DecisionSignal/Portfolio 前端市场类型与筛选**；告警（大盘红绿灯）市场放行仍作为后续 PR。对齐 #1718 日韩 MVP 模式。
+
+> 后续更新：台股股票索引/种子与 Web 自动补全已补齐（见下方「台湾股票索引与 Web 自动补全」一节），大盘复盘、股权集中度（TDCC）与本地估算筹码分布也已上线（见对应章节）；本节以下内容保留原 PR #1772 的历史范围描述。
 
 支持格式：
 
@@ -101,7 +103,7 @@ PY
 
 约束与边界：
 
-- **严格 suffix-only**：裸 `2330`、`00878` 等不带后缀的代码不会进入台股语义（`detect_market` / `get_market_for_stock` 仅在显式 `.TW`/`.TWO` 后缀时返回 `tw`）。本次**不引入任何台股股票索引/种子解析**，故裸码不可能经本地/远程股票池被改写为台股 suffix；该索引解析（与 jp/kr 同款的裸码命中行为）属后续 PR。
+- **严格 suffix-only**：裸 `2330`、`00878` 等不带后缀的代码不会进入台股语义（`detect_market` / `get_market_for_stock` 仅在显式 `.TW`/`.TWO` 后缀时返回 `tw`）。台股股票索引/种子已在后续 PR 中补齐（见「台湾股票索引与 Web 自动补全」一节），但目前仅用于 Web 自动补全建议展示，不参与 `detect_market`/`get_market_for_stock` 的裸码自动解析——裸码仍不会被自动改写为台股 suffix，需从建议列表选择或手动输入完整 suffix 代码。
 - 台股日线和基础实时/近实时行情只走 `YfinanceFetcher`，不尝试 AkShare、Tushare、Efinance、Pytdx、Baostock 等 A 股专属数据源。
 - 基本面复用既有 offshore yfinance 轻量路径；A 股专属资金流、龙虎榜、板块等能力按 `not_supported` 降级。
 - 报告 Prompt 已增加台股市场语义（新台币、三大法人、TWSE/TPEx ±10% 涨跌停），避免套用 A 股北向资金、龙虎榜等概念。
@@ -112,11 +114,85 @@ PY
 不承诺项：
 
 - 不承诺实时行情；Yahoo Finance 数据可能延迟或字段缺失。
-- 不承诺完整基本面、行业/板块、市场宽度、涨跌家数或台股大盘复盘。
-- 台股股票索引/种子、Web 自动补全与告警（大盘红绿灯）市场放行仍作为后续 PR；告警 MarketRegion 与后端 market_light 仍为 cn/hk/us，未含 tw。
+- 不承诺完整基本面、行业/板块、市场宽度或涨跌家数；大盘复盘已支持（见「台湾大盘复盘 v1」一节），但同样不含市场宽度/板块排行。
+- 台股股票索引/种子与 Web 自动补全已补齐；告警（大盘红绿灯）市场放行仍作为后续 PR，告警 MarketRegion 与后端 market_light 仍为 cn/hk/us，未含 tw。
 - 不补齐 Portfolio 的 TWD 汇率、成本、市值完整口径（属上述后续 PR 范围）。
 
 回滚方式：移除 `tw` 市场识别、交易日历注册、YFinance 路由扩展与服务层/API 市场枚举及前端市场类型放行，并删除本文档中的能力声明。
+
+## 台湾股票索引与 Web 自动补全
+
+台股股票索引/种子已补齐，Web 前端搜索框可对台股 suffix 代码、名称做自动补全建议，对齐既有日韩/A股搜索体验。
+
+支持范围：
+
+- `scripts/generate_index_from_csv.py` 新增 `determine_market()` 台股分支与 `extract_symbol_from_ts_code()` 的 `TW` 后缀保留规则，从官方 TWSE/TPEx 数据生成 `scripts/stock_index_seeds/stock_list_tw.csv`（约 2380 条，含上市/上柜）。
+- 该种子并入前端搜索索引 `apps/dsa-web/public/stocks.index.json`，前端 `StockAutocomplete` 组件的建议列表新增 `TW`（台股）市场徽章。
+- 修复了 4-6 位数字尾带字母的 ETF/特殊代码（如 `00878.TW`）在后端 `normalize_stock_code`、`_STOCK_CODE_RE` 校验正则、前端 `normalizeStockCode`/`validation.ts` 中的识别问题——此前会被字母尾误判为非法代码或路由到错误市场。
+
+边界：
+
+- 该索引仅用于 Web 自动补全建议展示，**不参与** `detect_market` / `get_market_for_stock` 的裸码自动解析（见「台湾个股 suffix-only MVP」一节）；用户仍需从建议列表选择完整 suffix 代码，或手动输入 `.TW`/`.TWO` 后缀。
+- 索引为一次性快照，不做实时增量更新；新上市/下市标的需重新生成种子并合并索引。
+
+回滚方式：从 `scripts/generate_index_from_csv.py` 移除台股分支，删除 `stock_list_tw.csv` 并从 `stocks.index.json` 剔除对应条目，回退前端 `MARKET_BADGE_CONFIG`/`Market` 类型中的 `TW` 项。
+
+## 台湾大盘复盘 v1
+
+`MARKET_REVIEW_REGION` 新增 `tw`，并纳入 `both` 的多市场顺序：`cn,hk,us,jp,kr,tw`（六市场）。实现方式与「日本/韩国大盘复盘 v1」完全对齐：`MarketProfile`（`src/core/market_profile.py` 的 `TW_PROFILE`）、`MarketStrategyBlueprint`（`src/core/market_strategy.py` 的 `TW_BLUEPRINT`）与 `MarketAnalyzer`（`src/market_analyzer.py`）按既有 cn/hk/us/jp/kr 分支模式逐一补齐 `tw` 分支。
+
+支持范围：
+
+- 通过 Yahoo Finance 获取台湾加权指数 `^TWII` 与柜买指数 `^TWOII`，输出台股大盘复盘。
+- 复盘策略聚焦加权指数/柜买指数趋势、台积电等权值股拉动、三大法人（外资/投信/自营商）买卖超方向与新台币汇率联动、半导体/AI 供应链主题线索。
+- 新闻搜索词、Prompt 市场语义（新台币、三大法人、TWSE/TPEx ±10% 涨跌停）和中英韩文复盘标题均按 `tw` 独立 profile 处理。
+- Web 设置页 `MARKET_REVIEW_REGION` 文本框可输入 `tw`、`cn,tw` 等逗号分隔子集；交易日检查复用既有 `XTAI / Asia/Taipei` 交易日历过滤 `both` 中当日开市市场（该日历注册见「台湾个股 suffix-only MVP」一节）。
+
+边界：
+
+- 与 JP/KR 大盘复盘 v1 相同：不提供涨跌家数、涨跌停、行业/板块排行或市场宽度统计（`has_market_stats=False`、`has_sector_rankings=False`）。
+- 台股 Market Light（大盘红绿灯）快照与告警放行仍未包含（`MARKET_LIGHT_REGIONS` 仍为 `cn/hk/us`），台股大盘复盘不产出 Market Light 快照。
+- 单一台股指数拉取失败按既有 yfinance fail-open 逻辑跳过，不拖垮其它指数或其它市场。
+- 若本地 `exchange-calendars` 版本缺少 `XTAI` 日历，沿用既有交易日 fail-open/fail-closed 语义。
+
+回滚方式：从 `MARKET_REVIEW_REGION` 合法值、Web 设置枚举、`market_profile.py`/`market_strategy.py`、`market_analyzer.py`、`_MARKET_REVIEW_MARKETS`（`src/core/market_review.py`）和本文档中移除 `tw`。
+
+## 台湾股权集中度（TDCC 集保户股权分散表）
+
+台股无法取得 A 股式的北向资金/龙虎榜数据，改为接入台湾集中保管结算所（TDCC）官方开放数据「集保户股权分散表」，作为台股专属的持股集中度补充信息。
+
+支持范围：
+
+- `TwShareholdingFetcher`（`data_provider/tw_shareholding_fetcher.py`）拉取 TDCC OpenData（`https://opendata.tdcc.com.tw/getOD.ashx?id=1-5`），按 17 个法定持股分级计算 `big_holder_pct`（第 15 级，大户）与 `retail_pct`（第 1-8 级，散户）等比例与人数。
+- 已接入台股报告的 `shareholding_concentration` 区块（`data_provider/base.py` 的 `_build_offshore_fundamental_context`），默认开启、fail-open，取不到数据维持 `not_supported`。
+- 数据来源为政府开放资料，采「政府资料开放授权条款第 1 版」(OGDL v1)。
+
+边界：
+
+- **此为持股人数/股数集中度指标，不是成本价分布**，字段（`big_holder_pct`、`retail_pct`、`total_holders`、`total_shares` 等）与 A 股 `ChipDistribution` schema（`avg_cost`/`cost_90_low`/`cost_90_high`/`concentration_90`/`profit_ratio`）严格分离，不互相映射（回归测试见 `tests/test_tw_shareholding_report_wiring.py` 对字段名不重叠的显式断言）。
+- TDCC 数据通常按周更新，非每日更新；接口失败/限流/空响应/字段缺失一律 fail-open 返回无数据，不中断分析。
+- 仅对 `.TW`/`.TWO` 生效，不改动现有市场流程；Web 展示、评分权重与衍生信号仍为后续。
+
+回滚方式：移除 `TwShareholdingFetcher` 及 `_build_offshore_fundamental_context` 中的 `shareholding_concentration` 分支、`src/analyzer.py` 对应的 Prompt 渲染段，并删除本文档中的能力声明。
+
+## 台湾筹码分布（本地估算，非官方数据）
+
+台股没有类似 akshare `stock_cyq_em` / tushare `cyq_chips` 的官方或第三方筹码分布接口。筹码分布本身在任何市场都没有「官方 ground truth」——A 股的两个接口本质上也只是对方服务器已经算好的成本分布表，本地代码只做百分位提取（`tushare_fetcher.py` 的 `compute_cyq_metrics`）。台股改为在本地用「换手率衰减模型」从历史日线 OHLCV + 流通股数重新估算，这正是通达信/东方财富等工具内部推算筹码分布时使用的同一类方法。
+
+支持范围：
+
+- 纯计算模块 `data_provider/tw_chip_estimator.py`：按时间正序逐日衰减存量筹码（`turnover_rate = min(volume / shares_outstanding, 1.0)`）、按当日 `[low, high]` 价格区间摊入新换手份额，最终用与 `compute_cyq_metrics` 完全一致的百分位公式提取获利比例/平均成本/90%·70%集中度。
+- 接入点：`YfinanceFetcher.get_chip_distribution`（`data_provider/yfinance_fetcher.py`），只对台股 suffix 代码生效，复用既有 `get_daily_data` 拉历史行情、`fast_info.shares` 拿流通股数；无需新增调度/接线代码，现有多数据源筹码分布调度器（`DataFetcherManager.get_chip_distribution`）会自动纳入。
+- ETF 天然被排除：yfinance `fast_info` 对 ETF 通常不返回 `shares`（已用 `2330.TW`/`2454.TW`/`3008.TW` 正股 vs `0050.TW`/`00878.TW` ETF 实测验证）。
+- 数据来源标注为 `source="yfinance_tw_estimate"`，随 `ChipDistribution.to_dict()` 落库并透传到 `analysis_context_pack_overview`；报告 Prompt 中会附加一行免责声明（本地历史成交量估算、非官方数据、仅供方向性参考）。
+
+边界：
+
+- 默认回溯窗口 120 个交易日，历史数据不足 20 个交易日返回 `None`（`not_supported`）。
+- 已知局限：yfinance `auto_adjust=True` 会调整价格但不会回溯调整历史 Volume，若窗口内发生股票分割，较早几天的换手率会被低估；对台股大中型股在半年窗口内是低概率场景，暂不处理。
+- 与「台湾股权集中度」的持股人数集中度指标完全独立，不互相替代：前者是成本价维度的估算分布，后者是官方人数/股数集中度。
+
+回滚方式：移除 `data_provider/tw_chip_estimator.py`、`YfinanceFetcher.get_chip_distribution`、`pipeline.py`/`analyzer.py` 中对应的 `source` 透传与免责声明渲染，并删除本文档中的能力声明。
 
 ## 日本/韩国 Portfolio 与 Market Light 边界（Issue #1815 Phase 3）
 

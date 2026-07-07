@@ -12,6 +12,7 @@
 
 import logging
 import copy
+import threading
 import uuid
 from typing import Optional, Dict, Any, Callable, List
 
@@ -31,6 +32,7 @@ from src.services.run_diagnostics import (
     get_current_diagnostic_context,
     reset_run_diagnostic_context,
 )
+from src.services.task_cancellation import TaskCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,7 @@ class AnalysisService:
         query_source: str = "api",
         portfolio_context: Optional[Dict[str, Any]] = None,
         report_language: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         执行股票分析
@@ -116,6 +119,7 @@ class AnalysisService:
                 analysis_skills=skills,
                 analysis_phase=analysis_phase,
                 portfolio_context=portfolio_context,
+                cancel_event=cancel_event,
             )
             
             # 确定报告类型 (API: simple/detailed/full/brief -> ReportType)
@@ -141,7 +145,9 @@ class AnalysisService:
             
             # 构建响应
             return self._build_analysis_response(result, query_id, report_type=rt.value)
-            
+
+        except TaskCancelledError:
+            raise
         except Exception as e:
             self.last_error = str(e)
             logger.error(f"分析股票 {stock_code} 失败: {e}", exc_info=True)

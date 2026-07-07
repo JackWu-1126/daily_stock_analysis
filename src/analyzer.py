@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple, Callable
@@ -63,6 +64,7 @@ from src.llm.generation_backend import (
     GenerationError,
     GenerationErrorCode,
 )
+from src.services.task_cancellation import TaskCancelledError
 from src.llm.usage import (
     attach_legacy_message_stability_audit,
     attach_message_hmacs,
@@ -2874,12 +2876,16 @@ class GeminiAnalyzer:
         stream_progress_callback: Optional[Callable[[int], None]] = None,
         response_validator: Optional[Callable[[str], None]] = None,
         audit_context: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Tuple[str, str, Dict[str, Any]]:
         """Compatibility wrapper around the configured generation backend."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise TaskCancelledError("_call_litellm")
         preflight_error = self.get_generation_backend_config_error()
         if preflight_error is not None and not self._can_use_generation_fallback(preflight_error):
             raise preflight_error
         backend_id, fallback_backend_id = self._resolve_generation_backend_config()
+        used_backend_id = backend_id
         try:
             result = self._get_generation_backend(backend_id).generate(
                 prompt,
@@ -2889,8 +2895,11 @@ class GeminiAnalyzer:
                 stream_progress_callback=stream_progress_callback,
                 response_validator=response_validator,
                 audit_context=audit_context,
+                cancel_event=cancel_event,
             )
         except GenerationError as exc:
+            if exc.error_code == GenerationErrorCode.CANCELLED:
+                raise TaskCancelledError("_call_litellm") from exc
             if not exc.fallbackable or not fallback_backend_id:
                 raise
             try:
@@ -2923,7 +2932,9 @@ class GeminiAnalyzer:
                     stream_progress_callback=stream_progress_callback,
                     response_validator=response_validator,
                     audit_context=audit_context,
+                    cancel_event=cancel_event,
                 )
+                used_backend_id = fallback_backend_id
             except _AllModelsFailedError:
                 raise
             except GenerationError as fallback_exc:
@@ -2972,7 +2983,18 @@ class GeminiAnalyzer:
                         "fallback_error": str(fallback_exc),
                     },
                 ) from fallback_exc
-        return result.text, result.model, result.usage
+        # Local CLI backends (e.g. claude_code_cli) return a raw provider-shaped
+        # usage dict, not litellm's already-normalized response; normalize it the
+        # same way the litellm retry path does so it actually gets persisted to
+        # the usage table instead of silently carrying usage_available=False
+        # downstream. The litellm backend's own generate() already normalizes
+        # (with full message-HMAC context) internally, so re-normalizing here
+        # would strip that context — only do this for local CLI backends.
+        if used_backend_id in LOCAL_CLI_GENERATION_BACKEND_IDS:
+            usage = self._normalize_usage(result.usage, model=result.model)
+        else:
+            usage = result.usage
+        return result.text, result.model, usage
 
     def _call_litellm_impl(
         self,
@@ -3209,6 +3231,7 @@ class GeminiAnalyzer:
         prompt: str,
         max_tokens: int = 2048,
         temperature: float = 0.7,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Optional[str]:
         """Public entry point for free-form text generation.
 
@@ -3220,6 +3243,7 @@ class GeminiAnalyzer:
             prompt:      Text prompt to send to the LLM.
             max_tokens:  Maximum tokens in the response (default 2048).
             temperature: Sampling temperature (default 0.7).
+            cancel_event: 协作式取消信号，本地 CLI 后端可在执行中检查并中止。
 
         Returns:
             Response text, or None if the LLM call fails (error is logged).
@@ -3228,6 +3252,7 @@ class GeminiAnalyzer:
             result = self._call_litellm(
                 prompt,
                 generation_config={"max_tokens": max_tokens, "temperature": temperature},
+                cancel_event=cancel_event,
             )
             if isinstance(result, tuple):
                 text, model_used, usage = result
@@ -3235,6 +3260,8 @@ class GeminiAnalyzer:
                     persist_llm_usage(usage, model_used, call_type="market_review")
                 return text
             return result
+        except TaskCancelledError:
+            raise
         except GenerationError:
             raise
         except Exception as exc:
@@ -3242,12 +3269,13 @@ class GeminiAnalyzer:
             return None
 
     def analyze(
-        self, 
+        self,
         context: Dict[str, Any],
         news_context: Optional[str] = None,
         progress_callback: Optional[Callable[[int, str], None]] = None,
         stream_progress_callback: Optional[Callable[[int], None]] = None,
         analysis_context_pack_summary: Optional[str] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> AnalysisResult:
         """
         分析单只股票
@@ -3266,10 +3294,14 @@ class GeminiAnalyzer:
             AnalysisResult 对象
         """
         def _emit_progress(progress: int, message: str) -> None:
+            if cancel_event is not None and cancel_event.is_set():
+                raise TaskCancelledError(code)
             if progress_callback is None:
                 return
             try:
                 progress_callback(progress, message)
+            except TaskCancelledError:
+                raise
             except Exception as exc:
                 logger.debug("[analyzer] progress callback skipped: %s", exc)
 
@@ -3445,6 +3477,8 @@ class GeminiAnalyzer:
             while True:
                 start_time = time.time()
                 try:
+                    if cancel_event is not None and cancel_event.is_set():
+                        raise TaskCancelledError(code)
                     response_text, model_used, llm_usage = self._call_litellm(
                         current_prompt,
                         generation_config,
@@ -3453,6 +3487,7 @@ class GeminiAnalyzer:
                         stream_progress_callback=stream_progress_callback,
                         response_validator=self._validate_json_response,
                         audit_context=legacy_audit_context,
+                        cancel_event=cancel_event,
                     )
                 except _AllModelsFailedError as exc:
                     if exc.last_response_text is not None:
@@ -3466,6 +3501,30 @@ class GeminiAnalyzer:
                         llm_usage = exc.last_usage
                     else:
                         raise
+                except GenerationError as exc:
+                    # A retryable single-attempt failure (e.g. malformed JSON from a
+                    # backend with no configured fallback, such as claude_code_cli
+                    # with GENERATION_FALLBACK_BACKEND unset) has no "next model" to
+                    # fall back to. Retry the SAME backend on the existing integrity
+                    # retry budget instead of failing the whole analysis on one bad
+                    # response -- LLM output is stochastic and often self-corrects.
+                    if exc.retryable and config.report_integrity_enabled and retry_count < max_retries:
+                        retry_count += 1
+                        logger.warning(
+                            "[LLM JSON] %s(%s): %s -> retry %d/%d",
+                            name,
+                            code,
+                            exc,
+                            retry_count,
+                            max_retries,
+                        )
+                        retry_progress = min(99, 92 + retry_count * 2)
+                        _emit_progress(
+                            retry_progress,
+                            f"{name}：响应校验失败，正在重试（{retry_count}/{max_retries}）",
+                        )
+                        continue
+                    raise
                 elapsed = time.time() - start_time
 
                 # 记录响应信息
@@ -3792,6 +3851,14 @@ class GeminiAnalyzer:
 | 70%筹码集中度 | {chip.get('concentration_70', 0):.2%} | |
 | 筹码状态 | {chip.get('chip_status', unknown_text)} | |
 """
+            if str(chip.get('source', '') or '').startswith('yfinance'):
+                chip_estimate_note = (
+                    "> Note: the above chip distribution is a local estimate derived from historical "
+                    "turnover (not an official data feed); treat the exact figures as directional, not precise."
+                    if report_language in ("en", "ko")
+                    else "> 注：以上筹码分布为基于历史成交量的本地估算，非官方数据，仅供方向性参考，请勿过度解读精确数值。"
+                )
+                prompt += f"{chip_estimate_note}\n"
         else:
             chip_unavailable_text = get_chip_unavailable_text(report_language)
             chip_instruction = (

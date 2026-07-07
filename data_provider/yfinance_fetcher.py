@@ -32,7 +32,12 @@ from tenacity import (
 )
 
 from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, is_bse_code
-from .realtime_types import UnifiedRealtimeQuote, RealtimeSource
+from .realtime_types import UnifiedRealtimeQuote, RealtimeSource, ChipDistribution
+from .tw_chip_estimator import (
+    estimate_tw_chip_distribution,
+    LOOKBACK_TRADING_DAYS as TW_CHIP_LOOKBACK_TRADING_DAYS,
+    MIN_REQUIRED_TRADING_DAYS as TW_CHIP_MIN_REQUIRED_TRADING_DAYS,
+)
 from .us_index_mapping import get_us_index_yf_symbol, is_us_stock_code
 from src.services.market_symbol_utils import get_suffix_market, is_suffix_market_symbol
 
@@ -92,6 +97,76 @@ class YfinanceFetcher(BaseFetcher):
         e.g. 00878 / 006208), wider than the JP `.T` range.
         """
         return is_suffix_market_symbol(stock_code, "tw")
+
+    def get_chip_distribution(self, stock_code: str) -> Optional[ChipDistribution]:
+        """
+        台股筹码分布（本地估算，非官方数据）
+
+        台湾没有 akshare/tushare 那样现成的筹码分布接口，这里用换手率衰减模型
+        从历史日线 OHLCV + 流通股数在本地重新估算（算法见 tw_chip_estimator.py）。
+        ETF 天然被排除：yfinance fast_info 对 ETF 通常不返回 shares。
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            ChipDistribution 对象（source="yfinance_tw_estimate"），不支持/数据不足/
+            任何异常均 fail-open 返回 None。
+        """
+        if not self._is_tw_suffix_stock(stock_code):
+            return None
+
+        try:
+            df = self.get_daily_data(stock_code, days=TW_CHIP_LOOKBACK_TRADING_DAYS * 2)
+            if df is None or df.empty or len(df) < TW_CHIP_MIN_REQUIRED_TRADING_DAYS:
+                logger.debug(f"[tw-chip] {stock_code} 历史数据不足，跳过筹码估算")
+                return None
+
+            import yfinance as yf
+
+            yf_symbol = self._convert_stock_code(stock_code)
+            ticker = yf.Ticker(yf_symbol)
+            shares = None
+            try:
+                info = ticker.fast_info
+                shares = getattr(info, "shares", None)
+            except Exception as exc:
+                logger.debug(f"[tw-chip] {stock_code} fast_info 获取流通股数失败: {exc}")
+
+            if not shares or shares <= 0:
+                logger.debug(f"[tw-chip] {stock_code} 无有效流通股数（可能是 ETF），跳过筹码估算")
+                return None
+
+            current_price = float(df["close"].iloc[-1])
+            metrics = estimate_tw_chip_distribution(
+                df.tail(TW_CHIP_LOOKBACK_TRADING_DAYS),
+                shares_outstanding=float(shares),
+                current_price=current_price,
+            )
+            if metrics is None:
+                logger.debug(f"[tw-chip] {stock_code} 筹码估算数据不足或无效")
+                return None
+
+            last_date = df["date"].iloc[-1]
+            date_str = (
+                last_date.strftime("%Y-%m-%d")
+                if hasattr(last_date, "strftime")
+                else str(last_date)[:10]
+            )
+            chip = ChipDistribution(
+                code=stock_code,
+                date=date_str,
+                source="yfinance_tw_estimate",
+                **metrics,
+            )
+            logger.info(
+                f"[tw-chip] {stock_code} 本地估算成功: 获利比例={chip.profit_ratio:.1%}, "
+                f"平均成本={chip.avg_cost}, 90%集中度={chip.concentration_90:.2%}"
+            )
+            return chip
+        except Exception as exc:
+            logger.warning(f"[tw-chip] {stock_code} 筹码分布估算失败: {exc}")
+            return None
 
     def _convert_stock_code(self, stock_code: str) -> str:
         """

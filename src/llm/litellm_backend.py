@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from src.llm.generation_backend import (
     GenerationBackend,
     GenerationCapabilities,
+    GenerationError,
+    GenerationErrorCode,
     GenerationResult,
 )
 
@@ -49,7 +52,20 @@ class LiteLLMGenerationBackend(GenerationBackend):
         stream_progress_callback: Optional[Callable[[int], None]] = None,
         response_validator: Optional[Callable[[str], None]] = None,
         audit_context: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> GenerationResult:
+        if cancel_event is not None and cancel_event.is_set():
+            # litellm.completion() is a single blocking HTTP call with no external
+            # abort handle -- cancellation can only be honored before dispatch.
+            raise GenerationError(
+                error_code=GenerationErrorCode.CANCELLED,
+                stage="execution",
+                retryable=False,
+                fallbackable=False,
+                backend=self.backend_id,
+                provider=_provider_from_model(generation_config.get("model", "")),
+                details={"reason": "cancelled"},
+            )
         text, model, usage = self._completion_callable(
             prompt,
             generation_config,

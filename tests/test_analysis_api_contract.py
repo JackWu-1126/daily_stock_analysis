@@ -33,6 +33,7 @@ try:
         _load_sync_fundamental_sources,
         get_analysis_status,
         get_task_list,
+        cancel_analysis_task,
     )
 except Exception:  # pragma: no cover - optional dependency environments
     create_app = None
@@ -44,6 +45,7 @@ except Exception:  # pragma: no cover - optional dependency environments
     _load_sync_fundamental_sources = None
     get_analysis_status = None
     get_task_list = None
+    cancel_analysis_task = None
 
 from src.enums import ReportType
 from src.services.analysis_service import AnalysisService
@@ -399,6 +401,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             override_region="cn,us",
             return_structured=True,
             trigger_source="api",
+            cancel_event=None,
         )
 
     def test_market_review_runtime_initializes_analyzer_for_litellm_provider(self) -> None:
@@ -454,6 +457,7 @@ class AnalysisApiContractTestCase(unittest.TestCase):
             override_region="cn",
             return_structured=True,
             trigger_source="api",
+            cancel_event=None,
         )
 
     def test_run_market_review_uses_request_scoped_config_language(self) -> None:
@@ -553,6 +557,83 @@ class AnalysisApiContractTestCase(unittest.TestCase):
                 self.assertEqual(status.status, task_status.value)
                 self.assertEqual(status.progress, 42)
                 self.assertIsNone(status.result)
+
+    def test_cancel_analysis_task_returns_404_for_unknown_task(self) -> None:
+        if cancel_analysis_task is None or analysis_endpoint_module is None:
+            self.skipTest("analysis endpoint helpers unavailable in this environment")
+
+        queue = MagicMock()
+        queue.get_task.return_value = None
+
+        with patch("api.v1.endpoints.analysis.get_task_queue", return_value=queue):
+            with self.assertRaises(Exception) as ctx:
+                cancel_analysis_task("does-not-exist")
+
+        self.assertEqual(getattr(ctx.exception, "status_code", None), 404)
+        queue.request_cancel.assert_not_called()
+
+    def test_cancel_analysis_task_returns_updated_task_info(self) -> None:
+        if cancel_analysis_task is None or analysis_endpoint_module is None:
+            self.skipTest("analysis endpoint helpers unavailable in this environment")
+
+        existing = SimpleNamespace(
+            task_id="task-1",
+            trace_id="trace-1",
+            stock_code="600519",
+            stock_name="贵州茅台",
+            status=analysis_endpoint_module.TaskStatusEnum.PROCESSING,
+            progress=40,
+            result=None,
+            error=None,
+            original_query=None,
+            selection_source=None,
+            analysis_phase="auto",
+            skills=[],
+        )
+        cancelled = SimpleNamespace(
+            task_id="task-1",
+            trace_id="trace-1",
+            stock_code="600519",
+            stock_name="贵州茅台",
+            status=analysis_endpoint_module.TaskStatusEnum.CANCEL_REQUESTED,
+            progress=40,
+            message="正在请求取消...",
+            result=None,
+            error=None,
+            original_query=None,
+            selection_source=None,
+            analysis_phase="auto",
+            skills=[],
+            to_dict=lambda: {
+                "task_id": "task-1",
+                "trace_id": "trace-1",
+                "stock_code": "600519",
+                "stock_name": "贵州茅台",
+                "status": "cancel_requested",
+                "progress": 40,
+                "message": "正在请求取消...",
+                "report_type": "detailed",
+                "analysis_phase": "auto",
+                "created_at": "2026-05-21T17:40:00",
+                "started_at": None,
+                "completed_at": None,
+                "error": None,
+                "original_query": None,
+                "selection_source": None,
+                "skills": [],
+            },
+        )
+
+        queue = MagicMock()
+        queue.get_task.return_value = existing
+        queue.request_cancel.return_value = cancelled
+
+        with patch("api.v1.endpoints.analysis.get_task_queue", return_value=queue):
+            result = cancel_analysis_task("task-1")
+
+        queue.request_cancel.assert_called_once_with("task-1")
+        self.assertEqual(result.status, "cancel_requested")
+        self.assertEqual(result.task_id, "task-1")
 
     def test_get_analysis_status_normalizes_completed_queue_result_contract(self) -> None:
         if get_analysis_status is None or analysis_endpoint_module is None:
