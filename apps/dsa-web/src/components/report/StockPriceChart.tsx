@@ -2,6 +2,7 @@ import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Bar,
+  Brush,
   CartesianGrid,
   Cell,
   ComposedChart,
@@ -164,6 +165,11 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({ stockCode, sto
   const [data, setData] = useState<KLinePoint[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<ParsedApiError | null>(null);
+  const [brushRange, setBrushRange] = useState<{ startIndex: number; endIndex: number } | null>(null);
+  // Recharts' Brush keeps its own internal traveller position once dragged and
+  // won't re-sync just because startIndex/endIndex props go back to undefined;
+  // bump this to force the Brush to fully remount so it visually resets too.
+  const [brushResetKey, setBrushResetKey] = useState(0);
 
   const fetchData = useCallback(async () => {
     if (!stockCode) return;
@@ -183,12 +189,25 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({ stockCode, sto
   useEffect(() => {
     setData([]);
     setError(null);
+    setBrushRange(null);
+    setBrushResetKey((key) => key + 1);
     if (stockCode) {
       fetchData();
     }
   }, [stockCode, rangeDays, fetchData]);
 
   const candleDataKey = useMemo(() => (point: KLinePoint) => [point.low, point.high], []);
+
+  const priceChartData = useMemo(() => {
+    if (!brushRange) return data;
+    return data.slice(brushRange.startIndex, brushRange.endIndex + 1);
+  }, [data, brushRange]);
+
+  const isZoomed = brushRange !== null;
+  const resetZoom = useCallback(() => {
+    setBrushRange(null);
+    setBrushResetKey((key) => key + 1);
+  }, []);
 
   if (!stockCode) {
     return null;
@@ -203,6 +222,15 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({ stockCode, sto
           <div className="flex items-center gap-2">
             {isLoading ? (
               <div className="home-spinner h-3.5 w-3.5 animate-spin border-2" aria-hidden="true" />
+            ) : null}
+            {isZoomed ? (
+              <button
+                type="button"
+                onClick={resetZoom}
+                className="home-accent-link text-xs"
+              >
+                {text.chartResetZoom}
+              </button>
             ) : null}
             <RangeControls rangeDays={rangeDays} onChange={setRangeDays} text={text} />
           </div>
@@ -234,7 +262,7 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({ stockCode, sto
         <div className="space-y-1">
           <div className="h-[260px] w-full">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 8 }}>
+              <ComposedChart data={priceChartData} margin={{ top: 8, right: 12, bottom: 0, left: 8 }}>
                 <CartesianGrid stroke={GRID_STROKE} vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -261,8 +289,8 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({ stockCode, sto
               </ComposedChart>
             </ResponsiveContainer>
           </div>
-          <div className="h-[90px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="h-[130px] w-full">
+            <ResponsiveContainer key={brushResetKey} width="100%" height="100%">
               <ComposedChart data={data} margin={{ top: 0, right: 12, bottom: 4, left: 8 }}>
                 <CartesianGrid stroke={GRID_STROKE} vertical={false} />
                 <XAxis
@@ -283,6 +311,17 @@ export const StockPriceChart: React.FC<StockPriceChartProps> = ({ stockCode, sto
                     <Cell key={point.date} fill={getPriceColor(point)} fillOpacity={0.6} />
                   ))}
                 </Bar>
+                <Brush
+                  dataKey="date"
+                  height={22}
+                  travellerWidth={8}
+                  startIndex={brushRange?.startIndex}
+                  endIndex={brushRange?.endIndex}
+                  tickFormatter={(value: string) => value.slice(5)}
+                  stroke={AXIS_STROKE}
+                  fill="hsl(var(--card))"
+                  onChange={(range: { startIndex: number; endIndex: number }) => setBrushRange(range)}
+                />
               </ComposedChart>
             </ResponsiveContainer>
           </div>

@@ -26,6 +26,14 @@ from src.services.system_config_service import ConfigConflictError, ConfigImport
 
 class SystemConfigServiceTestCase(unittest.TestCase):
     def setUp(self) -> None:
+        # Snapshot the full process environment so this test class is immune to
+        # os.environ leaks from other test modules earlier in a full-suite run
+        # (validation logic here reads live process env, so accumulated leftover
+        # vars from unrelated tests can otherwise trigger spurious ConfigValidationError
+        # only when running `pytest tests/` as a whole, never in isolation).
+        self._env_snapshot = dict(os.environ)
+        self.addCleanup(self._restore_env_snapshot)
+
         self.temp_dir = tempfile.TemporaryDirectory()
         self.env_path = Path(self.temp_dir.name) / ".env"
         self.env_path.write_text(
@@ -40,6 +48,19 @@ class SystemConfigServiceTestCase(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        # Some other test module elsewhere in a full-suite run ends up loading the
+        # real repo-root .env into the live process environment (dotenv's
+        # load_dotenv(..., override=False) never removes what it once set), which
+        # leaks real values like LLM_CHANNELS=ollama / LITELLM_MODEL=ollama/...
+        # into os.environ. Because override=False also means an *existing*
+        # os.environ value always wins over this test's own isolated temp .env
+        # file, that leak silently shadows the provider/model config these tests
+        # set up, causing spurious ConfigValidationError only in full-suite runs.
+        # Scrub the LLM/LiteLLM provider-config namespace so this test class is
+        # only ever driven by its own temp .env file, never by ambient process env.
+        for leaked_key in [k for k in os.environ if k.startswith(("LLM_", "LITELLM_"))]:
+            os.environ.pop(leaked_key, None)
+
         os.environ["ENV_FILE"] = str(self.env_path)
         Config.reset_instance()
 
@@ -50,6 +71,10 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         Config.reset_instance()
         os.environ.pop("ENV_FILE", None)
         self.temp_dir.cleanup()
+
+    def _restore_env_snapshot(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env_snapshot)
 
     def _rewrite_env(self, *lines: str) -> None:
         self.env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
