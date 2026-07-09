@@ -16,8 +16,8 @@ x-common: &common
     dockerfile: docker/Dockerfile
   restart: unless-stopped
 
-  # 环境变量（从 .env 文件加载）。不要将 ../.env 作为单文件 volume 挂载到 /app/.env，
-  # 否则 Docker mount point 会阻止配置保存时的 os.replace 原子更新。
+  # 环境变量（从 .env 文件加载）。这一步只在容器启动瞬间把 .env 内容灌进环境变量，
+  # 之后网页/API 对配置的写入不会经过这里，所以还需要下面的目录挂载 + ENV_FILE。
   env_file:
     - ../.env
 
@@ -35,6 +35,10 @@ x-common: &common
     - ${USERPROFILE}/.claude/.credentials.json:/home/dsa/.claude/.credentials.json:ro
     # 如需覆盖前端静态资源，可挂载本地 static 目录
     # - ../static:/app/static:ro
+    # 挂载项目根目录（而非单独挂载 .env 单一文件——单文件 volume 会阻止配置保存时
+    # os.replace 的原子重命名）。配合下方 ENV_FILE，让网页/API 对运行时配置的写入
+    # 直接落到宿主机的 ../.env，下次重启时 env_file 读到的就是最新内容。
+    - ..:/app/hostroot
 
   environment:
     - TZ=Asia/Shanghai
@@ -42,6 +46,9 @@ x-common: &common
     # Web/API service bind address (must be 0.0.0.0 inside container)
     - WEBUI_HOST=0.0.0.0
     # API_PORT 从 .env 文件读取，无需在此硬编码
+    # 运行时配置读写改指向宿主机挂载的 .env（见上方 ..:/app/hostroot），
+    # 而不是容器内独立、重启即丢失的 /app/.env 副本。
+    - ENV_FILE=/app/hostroot/.env
 
     # 代理设置（如果需要）
     # - http_proxy=http://host.docker.internal:10809

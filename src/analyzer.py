@@ -2002,7 +2002,7 @@ class GeminiAnalyzer:
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
 - 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
-- 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
+- `dashboard.phase_decision` 七个字段必须**全部**输出，禁止省略整个区块、禁止留空，这是硬性要求而非可选项：`phase_context` 必须是对象（至少含 `phase` 字段）；`watch_conditions`、`data_limitations` 必须是字符串数组，即使当前无风险/无限制，也要写入至少一项占位说明（如"暂无显著阶段性风险"、"数据完整无已知限制"），不得输出为空数组或省略；`action_window`、`immediate_action`、`next_check_time`、`confidence_reason` 必须是非空字符串。盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点；盘前/盘后/非交易日/未知阶段同样必须依该阶段给出对应的观察建议（例如"盘后复盘，下一次检查点为次日开盘前"），不得因为不在盘中就省略此区块。
 - 建议输出可选展示字段 `dashboard.signal_attribution` 六字段；解释推荐理由的构成，包括技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号。
 - 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。
 - `trend_analysis`、`technical_analysis`、`ma_analysis`、`volume_analysis`、`pattern_analysis`、`fundamental_analysis`、`sector_position`、`company_highlights`、`news_summary`、`market_sentiment`、`hot_topics`、`analysis_summary`、`key_points`、`risk_warning`、`buy_reason`、`data_sources`、`short_term_outlook`、`medium_term_outlook` 这些字段的值必须是纯文本字符串，禁止输出嵌套对象或数组（例如不要写成 `{"trend_status": "..."}`，而要直接写成一句话文本）。"""
@@ -2180,7 +2180,7 @@ class GeminiAnalyzer:
 - 股价位于支撑与压力之间、资金流不明确时，优先输出“持有/震荡/观望/洗盘观察”等可执行的中性建议；`decision_type` 仍保持 `hold`。
 - 只有在接近支撑确认或有效突破压力，且资金流/量价配合时，才能给出买入；接近压力且资金流出时不得追买。
 - 只有在跌破关键支撑、主力资金持续流出或风险显著放大时，才能给出卖出/减仓。
-- 必须输出 `dashboard.phase_decision` 七字段；盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点。
+- `dashboard.phase_decision` 七个字段必须**全部**输出，禁止省略整个区块、禁止留空，这是硬性要求而非可选项：`phase_context` 必须是对象（至少含 `phase` 字段）；`watch_conditions`、`data_limitations` 必须是字符串数组，即使当前无风险/无限制，也要写入至少一项占位说明（如"暂无显著阶段性风险"、"数据完整无已知限制"），不得输出为空数组或省略；`action_window`、`immediate_action`、`next_check_time`、`confidence_reason` 必须是非空字符串。盘中/午休/临近收盘要给出当前动作、观察条件和下一次检查点；盘前/盘后/非交易日/未知阶段同样必须依该阶段给出对应的观察建议（例如"盘后复盘，下一次检查点为次日开盘前"），不得因为不在盘中就省略此区块。
 - 建议输出可选展示字段 `dashboard.signal_attribution` 六字段；解释推荐理由的构成，包括技术指标、新闻舆情、基本面、市场环境的贡献度，以及最强看多/看空信号。
 - 盘前、非交易日或未知阶段不得伪造今日盘中走势；quote/daily_bars/technical 存在 stale、fallback、missing、fetch_failed、partial 或 estimated 时，`confidence_level` 不得为高。
 - `trend_analysis`、`technical_analysis`、`ma_analysis`、`volume_analysis`、`pattern_analysis`、`fundamental_analysis`、`sector_position`、`company_highlights`、`news_summary`、`market_sentiment`、`hot_topics`、`analysis_summary`、`key_points`、`risk_warning`、`buy_reason`、`data_sources`、`short_term_outlook`、`medium_term_outlook` 这些字段的值必须是纯文本字符串，禁止输出嵌套对象或数组（例如不要写成 `{"trend_status": "..."}`，而要直接写成一句话文本）。"""
