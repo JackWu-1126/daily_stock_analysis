@@ -23,6 +23,7 @@ from src.llm import local_cli_backend as local_cli_backend_module  # noqa: E402
 from src.llm.generation_backend import GenerationError, GenerationErrorCode  # noqa: E402
 from src.llm.local_cli_backend import (  # noqa: E402
     CLAUDE_CODE_CLI_PRESET,
+    CLAUDE_SEARCH_PRESET,
     LocalCliGenerationBackend,
     LocalCliExecutionResult,
     LocalCliExtractionError,
@@ -158,6 +159,53 @@ print(json.dumps({{"type": "result", "subtype": "success", "result": "{{\\"senti
     assert json.loads(result.text)["sentiment_score"] == 77
     for contract_arg in CLAUDE_CODE_CLI_PRESET.contract_args:
         assert contract_arg in runtime_argv
+
+
+def test_claude_search_preset_runtime_argv_is_websearch_only(tmp_path: Path) -> None:
+    """CLAUDE_SEARCH_PRESET must request exactly one tool (WebSearch) as both
+    the available AND pre-approved tool — never "" (disable-all) or "default"
+    (allow-all), and never any other built-in tool name. This is a security
+    regression guard, not just a contract-args smoke test."""
+    argv_path = tmp_path / "argv.json"
+    script = _script(
+        tmp_path,
+        f"""
+import json, pathlib, sys
+path = pathlib.Path({str(argv_path)!r})
+path.write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
+print(json.dumps({{"type": "result", "subtype": "success", "result": "no relevant news found"}}))
+""",
+    )
+    preset = LocalCliPreset(
+        preset_id="claude_code_search",
+        executable=sys.executable,
+        argv=(script, *CLAUDE_SEARCH_PRESET.argv),
+        display_name="Mock Claude WebSearch CLI",
+        extractor=CLAUDE_SEARCH_PRESET.extractor,
+        contract_args=CLAUDE_SEARCH_PRESET.contract_args,
+    )
+    backend = LocalCliGenerationBackend(
+        _config(generation_backend="claude_code_cli"),
+        preset=preset,
+    )
+
+    result = backend.generate("stock", {})
+    runtime_argv = json.loads(argv_path.read_text(encoding="utf-8"))
+
+    assert result.text == "no relevant news found"
+
+    tools_idx = runtime_argv.index("--tools")
+    assert runtime_argv[tools_idx + 1] == "WebSearch"
+
+    allowed_idx = runtime_argv.index("--allowedTools")
+    assert runtime_argv[allowed_idx + 1] == "WebSearch"
+
+    # Regression guard: never silently widen scope to disable-all / allow-all
+    # or leak any other built-in tool name into either flag's value.
+    assert "" not in (runtime_argv[tools_idx + 1], runtime_argv[allowed_idx + 1])
+    assert "default" not in (runtime_argv[tools_idx + 1], runtime_argv[allowed_idx + 1])
+    for leaked_tool in ("Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch"):
+        assert leaked_tool not in runtime_argv
 
 
 def test_claude_preset_extracts_usage_and_primary_model(tmp_path: Path) -> None:

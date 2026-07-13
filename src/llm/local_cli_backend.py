@@ -138,6 +138,15 @@ _CLAUDE_CODE_STATIC_INSTRUCTION = (
     "Return only the final response content. Do not call tools, read files, "
     "use MCP, or ask for interactive approval."
 )
+_CLAUDE_SEARCH_STATIC_INSTRUCTION = (
+    "You may use ONLY the WebSearch tool to find real, current news about the "
+    "given stock. Return ONLY a JSON array (no markdown, no prose, no code "
+    "fences) where each element is an object with exactly these string fields: "
+    "\"title\", \"source\", \"date\" (YYYY-MM-DD if known, else empty string), "
+    "\"summary\" (one line), \"url\". If WebSearch finds nothing relevant, "
+    "return an empty JSON array [] instead of fabricating content. "
+    "Do not call any other tool."
+)
 _PROMPT_FILE_PLACEHOLDER = "{prompt_file}"
 _OPENCODE_STATIC_INSTRUCTION = (
     "Generate the requested DSA stock analysis from the attached prompt file. "
@@ -265,6 +274,50 @@ CLAUDE_CODE_CLI_PRESET = LocalCliPreset(
         "--safe-mode",
         "--tools",
         "",
+        "--disallowedTools",
+        "mcp__*",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "-p",
+    ),
+)
+
+# Narrow-scope preset: WebSearch is the ONLY tool made available (--tools) and
+# the only one pre-approved for execution (--allowedTools) — both are required,
+# since --tools alone only curates which tools exist while --allowedTools grants
+# the permission to actually invoke one without an interactive prompt (verified
+# empirically: --tools "WebSearch" without --allowedTools still yields a
+# permission_denials entry for WebSearch). This is intentionally NOT registered
+# in SAFE_LOCAL_CLI_PRESETS / SUPPORTED_GENERATION_BACKENDS — it is an internal
+# helper for individual-stock news search, not a user-selectable GENERATION_BACKEND.
+CLAUDE_SEARCH_PRESET = LocalCliPreset(
+    preset_id="claude_code_search",
+    executable="claude",
+    argv=(
+        "--safe-mode",
+        "--tools",
+        "WebSearch",
+        "--allowedTools",
+        "WebSearch",
+        "--disallowedTools",
+        "mcp__*",
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "-p",
+        _CLAUDE_SEARCH_STATIC_INSTRUCTION,
+    ),
+    display_name="Claude WebSearch",
+    extractor=lambda result: _extract_claude_code_json(result, schema_mode=False),
+    contract_args=(
+        "--safe-mode",
+        "--tools",
+        "WebSearch",
+        "--allowedTools",
+        "WebSearch",
         "--disallowedTools",
         "mcp__*",
         "--strict-mcp-config",

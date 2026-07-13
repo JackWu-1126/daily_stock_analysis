@@ -1298,6 +1298,31 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         ],
         "warning_codes": [],
     },
+    "NEWS_CLAUDE_SEARCH_ENABLED": {
+        "title": "Claude WebSearch News Fallback",
+        "description": "When no search engine API is configured, use a narrow-scope Claude Code CLI call (WebSearch tool only, nothing else) to search for individual-stock news as a fallback. This consumes Claude usage/cost on every call where it triggers — disabled by default.",
+        "category": "data_source",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "false",
+        "options": [],
+        "validation": {},
+        "display_order": 64,
+        "help_key": "settings.data_source.news_claude_search",
+        "examples": [
+            "NEWS_CLAUDE_SEARCH_ENABLED=true",
+        ],
+        "docs": [
+            {
+                "label": "完整指南：环境变量完整列表",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/full-guide.md#环境变量完整列表",
+            },
+        ],
+        "warning_codes": [],
+    },
     "BIAS_THRESHOLD": {
         "title": "Bias Threshold (%)",
         "description": "Deviation threshold from MA5 (%). Exceeding this triggers 'do not chase' warning. Strong trend stocks auto-widen to 1.5x.",

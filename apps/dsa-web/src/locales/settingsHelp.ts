@@ -419,6 +419,18 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响个股分析与大盘复盘的新闻上下文补充来源；关闭后不影响其他已配置的搜索渠道。'],
     notes: ['关闭该开关可以完全停止对这些免费来源的对外请求。'],
   },
+  'settings.data_source.news_claude_search': {
+    title: 'Claude WebSearch 新闻兜底',
+    summary: '当没有配置任何搜索引擎 API Key 时，用一次窄范围的 Claude Code CLI 调用（只开放 WebSearch 一个工具，其余工具/文件/MCP 权限全部关闭）去搜个股新闻，作为兜底。',
+    usage: 'NEWS_CLAUDE_SEARCH_ENABLED 设为 true 开启；只在既有搜索引擎（Bocha/Tavily/Brave/SerpAPI/SearXNG）都不可用时才会触发，不会与已配置的搜索渠道重复调用。',
+    valueNotes: [
+      '每次触发都是一次真实的 Claude Code CLI 调用，会消耗 Claude 用量/费用，不是免费功能。',
+      '与主分析用的 GENERATION_BACKEND=claude_code_cli 是完全独立的两次调用，互不影响；这次调用被严格限制成只能用 WebSearch，不能读写文件、不能用 MCP。',
+      '默认关闭，需要你确认接受这笔额外用量后再手动开启。',
+    ],
+    impact: ['影响个股分析的新闻上下文补充来源；关闭时行为与之前完全一样（跳过情报搜索）。'],
+    notes: ['如果已经配置了搜索引擎 API Key，这个开关不会被触发，不会有额外花费。'],
+  },
   'settings.notification.FEISHU_WEBHOOK_URL': {
     title: '飞书群机器人 Webhook',
     summary: '配置飞书自定义群机器人，用于把分析报告推送到指定飞书群。',
@@ -1581,6 +1593,18 @@ const settingsHelpEnUS: SettingsHelpMap = {
     ],
     impact: ['Supplements the news context for stock analysis and market review; unrelated to other configured search channels.'],
     notes: ['Disable to stop all outbound requests to these free sources.'],
+  },
+  'settings.data_source.news_claude_search': {
+    title: 'Claude WebSearch News Fallback',
+    summary: 'When no search engine API key is configured, run a narrow-scope Claude Code CLI call (only the WebSearch tool enabled, everything else disabled) to search for per-stock news as a fallback.',
+    usage: 'Set NEWS_CLAUDE_SEARCH_ENABLED=true to enable; only triggers when the existing search engines (Bocha/Tavily/Brave/SerpAPI/SearXNG) are all unavailable, so it never duplicates an already-configured search channel.',
+    valueNotes: [
+      'Each trigger is a real Claude Code CLI call and consumes Claude usage/cost — this is not a free feature.',
+      'Fully independent from the main analysis GENERATION_BACKEND=claude_code_cli call; this call is locked down to WebSearch only, with no file access or MCP.',
+      'Disabled by default — enable it only after accepting the extra usage cost.',
+    ],
+    impact: ['Supplements the news context for individual stock analysis; when disabled, behavior is unchanged from before (search is simply skipped).'],
+    notes: ['If a search engine API key is already configured, this switch never triggers and incurs no extra cost.'],
   },
   'settings.notification.FEISHU_WEBHOOK_URL': {
     title: 'Feishu Webhook URL',

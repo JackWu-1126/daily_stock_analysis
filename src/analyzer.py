@@ -2903,7 +2903,15 @@ class GeminiAnalyzer:
             if exc.error_code == GenerationErrorCode.CANCELLED:
                 raise TaskCancelledError("_call_litellm") from exc
             if not exc.fallbackable or not fallback_backend_id:
+                logger.warning(
+                    "[生成后端] %s failed, no fallback available: %s (details=%s)",
+                    backend_id, exc.message, exc.details,
+                )
                 raise
+            logger.warning(
+                "[生成后端] %s failed: %s (details=%s), falling back to %s",
+                backend_id, exc.message, exc.details, fallback_backend_id,
+            )
             try:
                 fallback_backend = self._get_generation_backend(fallback_backend_id)
             except GenerationError as fallback_exc:

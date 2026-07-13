@@ -598,6 +598,11 @@ class StockAnalysisPipeline:
                         logger.warning(f"{stock_name}({code}) 保存新闻情报失败: {e}")
             else:
                 logger.info(f"{stock_name}({code}) 搜索服务不可用，跳过情报搜索")
+                claude_search_context = self._load_claude_search_context(
+                    code=code, stock_name=stock_name
+                )
+                if claude_search_context:
+                    news_context = claude_search_context
 
             # Step 4.5: Social sentiment intelligence (US stocks only)
             if self.social_sentiment_service is not None and self.social_sentiment_service.is_available and is_us_stock_code(code):
@@ -1289,6 +1294,19 @@ class StockAnalysisPipeline:
                     else persisted_intelligence_context
                 )
                 logger.info(f"[{code}] Agent mode: local intelligence evidence injected into news_context")
+
+            if not (self.search_service is not None and self.search_service.is_available):
+                claude_search_context = self._load_claude_search_context(
+                    code=code, stock_name=stock_name
+                )
+                if claude_search_context:
+                    existing = initial_context.get("news_context")
+                    initial_context["news_context"] = (
+                        f"{existing}\n\n{claude_search_context}"
+                        if existing
+                        else claude_search_context
+                    )
+                    logger.info(f"[{code}] Agent mode: Claude WebSearch news injected into news_context")
 
             # Issue #1066: ensure deep history is in DB before agent tools run
             self._ensure_agent_history(code)
@@ -2537,6 +2555,96 @@ class StockAnalysisPipeline:
             return "\n".join(lines)
         except Exception as exc:
             logger.debug("读取本地资讯证据失败（fail-open）: %s", exc)
+            return None
+
+    @staticmethod
+    def _parse_claude_search_items(text: str) -> List[Dict[str, str]]:
+        """Parse the Claude WebSearch preset's JSON-array response.
+
+        Defensive against the model wrapping the array in ```json fences
+        despite being told not to; any other malformed shape yields [].
+        """
+        import json
+        import re
+
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+        try:
+            data = json.loads(cleaned)
+        except (json.JSONDecodeError, TypeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict)]
+
+    def _load_claude_search_context(
+        self, *, code: str, stock_name: str
+    ) -> Optional[str]:
+        """Narrow-scope Claude WebSearch fallback when no search API is configured.
+
+        Only ever called when the regular search_service is unavailable; runs a
+        Claude Code CLI invocation locked down to the WebSearch tool alone
+        (nothing else — no file access, no MCP, no other tools) via a dedicated
+        preset that is intentionally not part of the public GENERATION_BACKEND
+        registry. Results are persisted through the same news_intel table as
+        the regular search_service path (self.db.save_news_intel) so they also
+        surface in the "相关资讯" history UI, not just the AI's news_context.
+        Fail-open like _load_persisted_intelligence_context: any error just
+        means no extra news context, never blocks the pipeline.
+        """
+        if not getattr(self.config, "news_claude_search_enabled", False):
+            return None
+        try:
+            from src.llm.local_cli_backend import CLAUDE_SEARCH_PRESET, LocalCliGenerationBackend
+            from src.search_service import SearchResponse, SearchResult
+
+            backend = LocalCliGenerationBackend(self.config, preset=CLAUDE_SEARCH_PRESET)
+            result = backend.generate(
+                f"股票代码：{code}，名称：{stock_name}",
+                {"max_output_tokens": 2048},
+            )
+            text = (result.text or "").strip()
+            if not text:
+                return None
+
+            items = self._parse_claude_search_items(text)
+            search_results = [
+                SearchResult(
+                    title=str(item.get("title") or "").strip(),
+                    snippet=str(item.get("summary") or "").strip(),
+                    url=str(item.get("url") or "").strip(),
+                    source=str(item.get("source") or "Claude WebSearch").strip(),
+                    published_date=str(item.get("date") or "").strip() or None,
+                )
+                for item in items
+            ]
+            search_results = [r for r in search_results if r.title or r.url]
+            if not search_results:
+                return None
+
+            response = SearchResponse(
+                query=f"{stock_name} {code}",
+                results=search_results,
+                provider="claude_websearch",
+            )
+
+            try:
+                self.db.save_news_intel(
+                    code=code,
+                    name=stock_name,
+                    dimension="claude_websearch",
+                    query=response.query,
+                    response=response,
+                    query_context=self._build_query_context(),
+                )
+            except Exception as exc:
+                logger.warning(f"{stock_name}({code}) Claude WebSearch 情报保存失败: {exc}")
+
+            context_text = response.to_context(max_results=len(search_results))
+            return f"## Claude WebSearch 情报（{stock_name}/{code}）\n{context_text}"
+        except Exception as exc:
+            logger.debug("Claude WebSearch 情报获取失败（fail-open）: %s", exc)
             return None
 
     def _build_legacy_analysis_artifacts(

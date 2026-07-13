@@ -834,6 +834,7 @@ class Config:
     newsnow_base_url: str = "https://newsnow.busiyi.world"  # NewsNow HTTP API base URL (数据源侧，不影响 LLM/provider base URL)
     news_intel_auto_fetch_enabled: bool = True  # 是否启用免费 RSS/NewsNow 资讯源的后台自动补种与定时拉取
     news_intel_auto_fetch_interval_minutes: int = 20  # 自动拉取间隔（分钟），与 SCHEDULE_ENABLED 无关，独立运作
+    news_claude_search_enabled: bool = False  # 无搜索引擎可用时，是否用窄范围 Claude WebSearch（仅此工具）补个股新闻；会消耗 Claude 用量，默认关闭
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
 
     # === Agent 模式配置 ===
@@ -1733,6 +1734,7 @@ class Config:
                 minimum=5,
                 maximum=1440,
             ),
+            news_claude_search_enabled=os.getenv('NEWS_CLAUDE_SEARCH_ENABLED', 'false').lower() == 'true',
             bias_threshold=parse_env_float(os.getenv('BIAS_THRESHOLD'), 5.0, field_name='BIAS_THRESHOLD', minimum=1.0),
             agent_generation_backend=agent_generation_backend,
             agent_litellm_model=agent_litellm_model,
